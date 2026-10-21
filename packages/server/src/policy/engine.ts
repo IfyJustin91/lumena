@@ -68,6 +68,8 @@ export class PolicyEngine {
   }
 
   addPolicy(policy: Policy): void {
+    // Store the policy as-is so that the `version` field (used for ETag-based
+    // optimistic concurrency control in the server) is preserved unchanged.
     this.policies.set(policy.walletId, policy);
   }
 
@@ -103,6 +105,12 @@ export class PolicyEngine {
     this.sessionSpendTracking.clear();
   }
 
+  /**
+   * Return the stored policy for a wallet, including its `version` field.
+   *
+   * The server uses this to compare the stored version against the
+   * `If-Match` header on PUT /policy/:walletId.
+   */
   getPolicy(walletId: string): Policy | null {
     return this.policies.get(walletId) ?? null;
   }
@@ -112,35 +120,48 @@ export class PolicyEngine {
   }
 
   evaluate(opts: EvaluateOpts): EvaluateResult {
+    const { approved, reason } = this.evaluateWithAudit(opts);
+    return reason === undefined ? { approved } : { approved, reason };
+  }
+
+  evaluateWithAudit(opts: EvaluateOpts): EvaluateResult & { rulesEvaluated: string[] } {
+    const rulesEvaluated: string[] = [];
     try {
       if (!opts || typeof opts !== "object") {
-        return { approved: false, reason: "Malformed evaluation options" };
+        return { approved: false, reason: "Malformed evaluation options", rulesEvaluated };
       }
 
       const policy = this.policies.get(opts.walletAddress);
 
       if (!policy) {
-        return this.defaultPolicy === "allow"
-          ? { approved: true }
-          : { approved: false, reason: `No policy found for wallet ${opts.walletAddress}` };
+        return {
+          approved: this.defaultPolicy === "allow",
+          reason:
+            this.defaultPolicy === "deny"
+              ? `No policy found for wallet ${opts.walletAddress}`
+              : undefined,
+          rulesEvaluated,
+        };
       }
 
       if (!Array.isArray(policy.rules)) {
-        return { approved: false, reason: "Policy has malformed rules" };
+        return { approved: false, reason: "Policy has malformed rules", rulesEvaluated };
       }
 
       for (const rule of policy.rules) {
+        rulesEvaluated.push(typeof rule?.type === "string" ? rule.type : "unknown");
         const result = this.evaluateRule(rule, opts);
         if (!result.approved) {
-          return result;
+          return { ...result, rulesEvaluated };
         }
       }
 
-      return { approved: true };
+      return { approved: true, rulesEvaluated };
     } catch (err) {
       return {
         approved: false,
         reason: `Policy evaluation failed closed: ${err instanceof Error ? err.message : String(err)}`,
+        rulesEvaluated,
       };
     }
   }

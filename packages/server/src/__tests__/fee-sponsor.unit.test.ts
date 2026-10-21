@@ -12,6 +12,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { StellarClient } from "@lumen/core";
 import { FeeSponsorService } from "../fee-sponsor/service.js";
+import { SequenceAllocator } from "../fee-sponsor/sequence-allocator.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -397,5 +398,184 @@ describe("FeeSponsorService.publicKey", () => {
     const service = new FeeSponsorService({ client: makeMockClient(), signer });
     expect(service.publicKey).toBe(feePayerKeypair.publicKey());
     expect(signer.publicKey).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency: distributed sequence number reservation
+// ---------------------------------------------------------------------------
+
+/**
+ * In-memory fake of the Redis primitives used by SequenceAllocator.  It
+ * emulates atomic INCR and SET NX PX semantics closely enough to exercise the
+ * allocator's reservation / rollback logic under concurrency.
+ */
+function makeFakeRedis() {
+  const store = new Map<string, string>();
+  const expiries = new Map<string, number>();
+
+  return {
+    async incr(key: string): Promise<number> {
+      const next = Number(store.get(key) ?? "0") + 1;
+      store.set(key, String(next));
+      return next;
+    },
+    async set(
+      key: string,
+      value: string,
+      opts?: { NX?: boolean; PX?: number },
+    ): Promise<"OK" | null> {
+      if (opts?.NX && store.has(key)) return null;
+      store.set(key, value);
+      if (opts?.PX) expiries.set(key, Date.now() + opts.PX);
+      return "OK";
+    },
+    async get(key: string): Promise<string | null> {
+      const exp = expiries.get(key);
+      if (exp !== undefined && exp <= Date.now()) {
+        store.delete(key);
+        expiries.delete(key);
+        return null;
+      }
+      return store.get(key) ?? null;
+    },
+    async del(key: string): Promise<number> {
+      const had = store.delete(key);
+      expiries.delete(key);
+      return had ? 1 : 0;
+    },
+    async eval(_script: string, _numKeys: number, ...args: string[]) {
+      // Minimal support for the allocator's compare-and-delete rollback:
+      //   if redis.call('GET', KEYS[1]) == ARGV[1] then DEL KEYS[1] end
+      const key = args[0];
+      const expected = args[1];
+      if (store.get(key) === expected) {
+        store.delete(key);
+        expiries.delete(key);
+        return 1;
+      }
+      return 0;
+    },
+  };
+}
+
+describe("FeeSponsorService concurrency (issue #233)", () => {
+  const CONCURRENCY = 50;
+
+  const signer = {
+    publicKey: vi.fn(() => feePayerKeypair.publicKey()),
+    sign: vi.fn(async (hash: Buffer) => feePayerKeypair.sign(hash)),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("submits 50 concurrent fee-bumps without a single txBAD_SEQ conflict", async () => {
+    const redis = makeFakeRedis();
+    const allocator = new SequenceAllocator({
+      redis: redis as any,
+      key: `seq:${feePayerKeypair.publicKey()}`,
+      startSequence: "100",
+      reservationTtlMs: 5_000,
+    });
+
+    // Horizon mock: rejects any submission whose fee-source sequence number
+    // has already been consumed, mirroring real txBAD_SEQ behaviour.
+    const consumed = new Set<string>();
+    const seenSequences: string[] = [];
+    const mockSubmit = vi.fn(async (tx: unknown) => {
+      const feeBump = tx as FeeBumpTransaction;
+      const seq = feeBump.innerTransaction.sequence;
+      if (consumed.has(seq)) {
+        const err: any = new Error("txBAD_SEQ");
+        err.response = { data: { extras: { result_codes: { transaction: "txBAD_SEQ" } } } };
+        throw err;
+      }
+      consumed.add(seq);
+      seenSequences.push(seq);
+      return { successful: true, hash: seq.padStart(64, "0").slice(0, 64) };
+    });
+
+    const service = new FeeSponsorService({
+      client: makeMockClient(mockSubmit),
+      signer,
+      sequenceAllocator: allocator,
+    });
+
+    const innerXdrs = Array.from({ length: CONCURRENCY }, () =>
+      buildSignedInnerTxXdr(Keypair.random(), Keypair.random().publicKey()),
+    );
+
+    const results = await Promise.all(
+      innerXdrs.map((xdr) => service.submit(xdr)),
+    );
+
+    expect(results).toHaveLength(CONCURRENCY);
+    expect(mockSubmit).toHaveBeenCalledTimes(CONCURRENCY);
+    // Every submission succeeded with a distinct sequence number.
+    expect(new Set(seenSequences).size).toBe(CONCURRENCY);
+    // No reservation leaked.
+    expect(await allocator.pendingReservations()).toBe(0);
+  });
+
+  it("retries with exponential backoff when Horizon reports txBAD_SEQ", async () => {
+    const redis = makeFakeRedis();
+    const allocator = new SequenceAllocator({
+      redis: redis as any,
+      key: `seq:${feePayerKeypair.publicKey()}`,
+      startSequence: "100",
+      reservationTtlMs: 5_000,
+    });
+
+    let attempts = 0;
+    const mockSubmit = vi.fn(async () => {
+      attempts += 1;
+      if (attempts <= 2) {
+        const err: any = new Error("txBAD_SEQ");
+        err.response = { data: { extras: { result_codes: { transaction: "txBAD_SEQ" } } } };
+        throw err;
+      }
+      return { successful: true, hash: "b".repeat(64) };
+    });
+
+    const service = new FeeSponsorService({
+      client: makeMockClient(mockSubmit),
+      signer,
+      sequenceAllocator: allocator,
+      maxRetries: 5,
+      baseRetryDelayMs: 1,
+    });
+
+    const innerXdr = buildSignedInnerTxXdr(
+      Keypair.random(),
+      Keypair.random().publicKey(),
+    );
+
+    const result = await service.submit(innerXdr);
+    expect(result.hash).toBe("b".repeat(64));
+    expect(attempts).toBe(3);
+  });
+
+  it("rolls back the reservation when a submission times out", async () => {
+    const redis = makeFakeRedis();
+    const allocator = new SequenceAllocator({
+      redis: redis as any,
+      key: `seq:${feePayerKeypair.publicKey()}`,
+      startSequence: "100",
+      reservationTtlMs: 20,
+    });
+
+    const reservation = await allocator.reserve();
+    expect(await allocator.pendingReservations()).toBe(1);
+
+    // Simulate the reservation timing out (holder crashed / hung).
+    await new Promise((r) => setTimeout(r, 40));
+    await allocator.rollbackExpired();
+
+    expect(await allocator.pendingReservations()).toBe(0);
+    // A subsequent reservation reuses the rolled-back sequence number.
+    const next = await allocator.reserve();
+    expect(next.sequence).toBe(reservation.sequence);
   });
 });

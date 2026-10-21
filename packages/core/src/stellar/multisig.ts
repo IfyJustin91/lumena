@@ -24,6 +24,12 @@ export interface SetupSessionKeyOpts {
   expiresAt?: number;
 }
 
+export interface RevokeSessionKeyOpts {
+  client: StellarClient;
+  accountKeypair: Keypair;
+  sessionPublicKey: string;
+}
+
 export interface ProposeUpgradeOpts {
   client: StellarClient;
   accountKeypair: Keypair;
@@ -219,5 +225,33 @@ export async function setupSessionKey(opts: SetupSessionKeyOpts): Promise<{ hash
   }
 
   throw new Error(`Session key setup failed: ${result.hash}`);
+}
+
+export async function revokeSessionKey(opts: RevokeSessionKeyOpts): Promise<{ hash: string }> {
+  const { client, accountKeypair, sessionPublicKey } = opts;
+
+  const account = await client.horizon.loadAccount(accountKeypair.publicKey());
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: client.networkPassphrase,
+  })
+    .addOperation(
+      Operation.setOptions({
+        signer: { ed25519PublicKey: sessionPublicKey, weight: 0 },
+      })
+    )
+    .setTimeout(180)
+    .build();
+
+  tx.sign(accountKeypair);
+
+  const result = await client.horizon.submitTransaction(tx);
+
+  if (result.successful) {
+    return { hash: result.hash };
+  }
+
+  throw new Error(`Session key revocation failed: ${result.hash}`);
 }
 

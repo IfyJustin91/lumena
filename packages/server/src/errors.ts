@@ -42,6 +42,26 @@ export class StellarError extends Error {
   }
 }
 
+export type TenantQuotaMetadata = {
+  limit: number;
+  remaining: number;
+  reset: number;
+  tier?: string;
+  tenantId?: string;
+};
+
+export class TenantQuotaError extends Error {
+  statusCode: number;
+  metadata: TenantQuotaMetadata;
+
+  constructor(message: string, metadata: TenantQuotaMetadata, statusCode = 429) {
+    super(message);
+    this.name = "TenantQuotaError";
+    this.statusCode = statusCode;
+    this.metadata = metadata;
+  }
+}
+
 export type ErrorResponse = {
   error: string;
   details?: unknown;
@@ -66,6 +86,24 @@ export const errorHandler = (
     return res.status(err.statusCode).json({
       error: err.message,
       ...(err.code ? { code: err.code } : {}),
+    });
+  }
+
+  if (err instanceof TenantQuotaError) {
+    const { limit, remaining, reset, tier, tenantId } = err.metadata;
+    res.setHeader("X-RateLimit-Limit", String(limit));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(reset));
+    if (tier) {
+      res.setHeader("X-RateLimit-Tier", tier);
+    }
+    if (tenantId) {
+      res.setHeader("X-Tenant-Id", tenantId);
+    }
+    res.setHeader("Retry-After", String(Math.max(0, reset - Math.floor(Date.now() / 1000))));
+    return res.status(err.statusCode).json({
+      error: err.message,
+      details: { limit, remaining, reset, ...(tier ? { tier } : {}) },
     });
   }
 

@@ -3,8 +3,10 @@ export { createSponsoredAccount } from "./stellar/account.js";
 export {
   setupMultisig,
   setupSessionKey,
+  revokeSessionKey,
   type SetupMultisigOpts,
   type SetupSessionKeyOpts,
+  type RevokeSessionKeyOpts,
 } from "./stellar/multisig.js";
 export {
   buildFeeBump,
@@ -30,6 +32,11 @@ export {
   type TrustlineOpts,
 } from "./stellar/account-helpers.js";
 export { KeyManager, type KeyStorage } from "./keys/manager.js";
+export {
+  generateMnemonic,
+  deriveKeypairFromMnemonic,
+  validateMnemonic,
+} from "./keys/mnemonic.js";
 export {
   PasskeyManager,
   parseDerSignature,

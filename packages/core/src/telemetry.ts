@@ -123,7 +123,60 @@ export const SENSITIVE_FIELDS: readonly string[] = [
  */
 export const REDACTED = '[REDACTED]';
 
+/**
+ * Placeholder value substituted for Stellar secret keys detected by value.
+ */
+export const REDACTED_STELLAR_SECRET = '[REDACTED:stellar-secret]';
+
+/**
+ * Matches a Stellar secret key (StrKey encoding: `S` followed by 55 Base32
+ * characters).
+ */
+const STELLAR_SECRET_PATTERN = /^S[A-Z2-7]{55}$/;
+
+/**
+ * Matches a Stellar secret key embedded anywhere inside a larger string.
+ */
+const STELLAR_SECRET_INLINE_PATTERN = /S[A-Z2-7]{55}/g;
+
+/**
+ * Matches a 12 or 24 word BIP39-style mnemonic phrase (lowercase words
+ * separated by single spaces).
+ */
+const MNEMONIC_PATTERN = /^(?:[a-z]+ ){11}(?:[a-z]+)$|^(?:[a-z]+ ){23}(?:[a-z]+)$/;
+
 const SENSITIVE_FIELD_SET = new Set(SENSITIVE_FIELDS.map((f) => f.toLowerCase()));
+
+/**
+ * Returns `true` if the given string is a Stellar secret key.
+ */
+export function isStellarSecretKey(value: string): boolean {
+  return STELLAR_SECRET_PATTERN.test(value);
+}
+
+/**
+ * Returns `true` if the given string looks like a 12/24 word mnemonic phrase.
+ */
+export function isMnemonicPhrase(value: string): boolean {
+  return MNEMONIC_PATTERN.test(value);
+}
+
+/**
+ * Redacts Stellar secret keys and mnemonic phrases from a string value.
+ *
+ * Strings that are entirely a secret key or mnemonic are replaced with
+ * {@link REDACTED_STELLAR_SECRET}. Secret keys embedded inside larger strings
+ * are replaced in place.
+ */
+export function redactString(value: string): string {
+  if (isStellarSecretKey(value) || isMnemonicPhrase(value)) {
+    return REDACTED_STELLAR_SECRET;
+  }
+  if (STELLAR_SECRET_INLINE_PATTERN.test(value)) {
+    return value.replace(STELLAR_SECRET_INLINE_PATTERN, REDACTED_STELLAR_SECRET);
+  }
+  return value;
+}
 
 /**
  * Normalizes a field name for comparison against the sensitive field list.
@@ -153,7 +206,9 @@ export function isSensitiveField(field: string): boolean {
  * - `Map`/`Set`: converted to plain arrays of redacted entries/values.
  * - `Date`: preserved as-is.
  * - Functions / symbols: replaced with `undefined` (not serializable).
- * - Primitives: returned unchanged.
+ * - Strings: scanned for Stellar secret keys and mnemonic phrases, which are
+ *   replaced with {@link REDACTED_STELLAR_SECRET}.
+ * - Other primitives: returned unchanged.
  *
  * Circular references are handled by tracking visited objects.
  */
@@ -164,6 +219,10 @@ export function redact<T>(value: T, seen: WeakSet<object> = new WeakSet()): unkn
 
   if (typeof value === 'function' || typeof value === 'symbol') {
     return undefined;
+  }
+
+  if (typeof value === 'string') {
+    return redactString(value);
   }
 
   if (typeof value !== 'object') {

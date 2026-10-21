@@ -78,10 +78,10 @@ describe("useCreateWalletWithPasskey", () => {
 
     // Simulate the pre-hydration state: provider mounted on the server where
     // isMounted is still false.
-    const { LumenContext } = await import("./context.js");
+    const { LumenContext, serverSafeLumenContextValue } = await import("./context.js");
     function ssrWrapper({ children }: { children: React.ReactNode }) {
       return (
-        <LumenContext.Provider value={{ client, isMounted: false }}>
+        <LumenContext.Provider value={{ ...serverSafeLumenContextValue, client, isMounted: false }}>
           {children}
         </LumenContext.Provider>
       );

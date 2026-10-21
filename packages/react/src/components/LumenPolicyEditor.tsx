@@ -10,6 +10,7 @@ import React, { useState } from "react";
 import { StrKey } from "@stellar/stellar-sdk";
 import type {
   AllowlistRule,
+  BlocklistRule,
   ContractAllowlistRule,
   PolicyRule,
   SpendLimit,
@@ -34,6 +35,7 @@ interface PolicyFormErrors {
   maxDaily?: string;
   maxPerTx?: string;
   destinations?: string;
+  blocklist?: string;
   contracts?: string;
   form?: string;
 }
@@ -54,6 +56,18 @@ function validatePositiveAmount(value: string, label: string): string | undefine
   return undefined;
 }
 
+function invalidAddressMessage(address: string): string {
+  return `'${address}' is not a valid Stellar address`;
+}
+
+/**
+ * Returns the non-empty lines that are not valid Stellar public keys.
+ * Empty lines are ignored.
+ */
+function findInvalidAddresses(value: string): string[] {
+  return splitLines(value).filter((address) => !StrKey.isValidEd25519PublicKey(address));
+}
+
 /**
  * Builds the policy rules from the form values. Returns the validation
  * errors instead when any input is malformed.
@@ -63,6 +77,7 @@ function buildRules(values: {
   maxDaily: string;
   maxPerTx: string;
   destinations: string;
+  blocklist: string;
   contracts: string;
 }): { rules: PolicyRule[]; errors: PolicyFormErrors } {
   const errors: PolicyFormErrors = {};
@@ -85,11 +100,20 @@ function buildRules(values: {
   }
 
   const destinations = splitLines(values.destinations);
-  const invalidDestination = destinations.find((address) => !StrKey.isValidEd25519PublicKey(address));
-  if (invalidDestination) {
-    errors.destinations = `Invalid Stellar public key: ${invalidDestination}`;
+  const invalidDestinations = findInvalidAddresses(values.destinations);
+  if (invalidDestinations.length > 0) {
+    errors.destinations = invalidAddressMessage(invalidDestinations[0]);
   } else if (destinations.length > 0) {
     const rule: AllowlistRule = { type: "allowlist", destinations };
+    rules.push(rule);
+  }
+
+  const blocklist = splitLines(values.blocklist);
+  const invalidBlocklist = findInvalidAddresses(values.blocklist);
+  if (invalidBlocklist.length > 0) {
+    errors.blocklist = invalidAddressMessage(invalidBlocklist[0]);
+  } else if (blocklist.length > 0) {
+    const rule: BlocklistRule = { type: "blocklist", destinations: blocklist };
     rules.push(rule);
   }
 
@@ -127,11 +151,14 @@ function getInitialValues(initialRules: PolicyRule[] = []) {
     (rule): rule is ContractAllowlistRule => rule.type === "contract_allowlist",
   );
 
+  const blocklist = initialRules.find((rule): rule is BlocklistRule => rule.type === "blocklist");
+
   return {
     asset: spendLimit?.asset ?? "XLM",
     maxDaily: spendLimit?.maxDaily ?? "",
     maxPerTx: spendLimit?.maxPerTx ?? "",
     destinations: allowlist?.destinations.join("\n") ?? "",
+    blocklist: blocklist?.destinations.join("\n") ?? "",
     contracts:
       contractAllowlist?.allowedContracts
         .map(({ contractId, methods }) =>
@@ -164,6 +191,10 @@ export function LumenPolicyEditor({
   const [errors, setErrors] = useState<PolicyFormErrors>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const invalidDestinations = findInvalidAddresses(values.destinations);
+  const invalidBlocklist = findInvalidAddresses(values.blocklist);
+  const hasInvalidAddresses = invalidDestinations.length > 0 || invalidBlocklist.length > 0;
 
   const update = (field: keyof typeof values) =>
     (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -245,9 +276,34 @@ export function LumenPolicyEditor({
           rows={4}
           value={values.destinations}
           onChange={update("destinations")}
-          aria-invalid={Boolean(errors.destinations)}
+          aria-invalid={Boolean(errors.destinations) || invalidDestinations.length > 0}
         />
-        {errors.destinations && <span role="alert" style={errorStyle}>{errors.destinations}</span>}
+        {invalidDestinations.map((address) => (
+          <span key={address} role="alert" style={errorStyle}>
+            {invalidAddressMessage(address)}
+          </span>
+        ))}
+        {invalidDestinations.length === 0 && errors.destinations && (
+          <span role="alert" style={errorStyle}>{errors.destinations}</span>
+        )}
+      </label>
+
+      <label className="lumen-policy-editor__blocklist" style={fieldStyle}>
+        Destination blocklist (one address per line)
+        <textarea
+          rows={4}
+          value={values.blocklist}
+          onChange={update("blocklist")}
+          aria-invalid={Boolean(errors.blocklist) || invalidBlocklist.length > 0}
+        />
+        {invalidBlocklist.map((address) => (
+          <span key={address} role="alert" style={errorStyle}>
+            {invalidAddressMessage(address)}
+          </span>
+        ))}
+        {invalidBlocklist.length === 0 && errors.blocklist && (
+          <span role="alert" style={errorStyle}>{errors.blocklist}</span>
+        )}
       </label>
 
       <label className="lumen-policy-editor__contracts" style={fieldStyle}>
@@ -264,7 +320,7 @@ export function LumenPolicyEditor({
       {errors.form && <p role="alert" style={errorStyle}>{errors.form}</p>}
       {saved && <p role="status" style={{ color: "#4caf50" }}>Policy saved</p>}
 
-      <button type="submit" disabled={saving} aria-busy={saving}>
+      <button type="submit" disabled={saving || hasInvalidAddresses} aria-busy={saving}>
         {saving ? "Saving…" : "Save policy"}
       </button>
     </form>

@@ -1,0 +1,24 @@
+[package]
+name = "benchmarks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Soroban gas and resource footprint profiling suite"
+publish = false
+
+[[bin]]
+name = "benchmarks"
+path = "src/main.rs"
+
+[lib]
+name = "benchmarks"
+path = "src/lib.rs"
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smart-account = { path = "../smart-account" }
+paymaster = { path = "../paymaster" }
+session-keys = { path = "../session-keys" }
+event-schema = { path = "../event-schema" }

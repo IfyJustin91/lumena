@@ -3,6 +3,11 @@ export interface Policy {
   walletId: string;
   rules: PolicyRule[];
   createdAt: Date;
+  /**
+   * Optimistic concurrency version. Starts at 1 when the policy is created and
+   * is incremented on every update. Used to detect lost updates via If-Match.
+   */
+  version: number;
 }
 
 export type PolicyRule =

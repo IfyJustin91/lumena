@@ -8,7 +8,16 @@ import type {
   SpendRecord,
   VelocityRecord,
 } from '@lumen/types';
-import type { PolicyStore, WalletRegistry } from '../interfaces';
+import type {
+  PolicyStore,
+  WalletRegistry,
+  TenantStore,
+  Tenant,
+  TenantTier,
+  WebhookDeliveryStore,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+} from '../interfaces';
 
 // ---------------------------------------------------------------------------
 // Prisma Client Singleton
@@ -90,6 +99,34 @@ interface PrismaVelocityTrackingRow {
   timestamp: Date;
 }
 
+interface PrismaTenantRow {
+  id: string;
+  name: string;
+  apiKeyHash: string;
+  tier: string;
+  monthlyGasQuotaXlm: string;
+  monthlyGasUsedXlm: string;
+  quotaResetAt: Date;
+  allowedDomains: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface PrismaWebhookDeliveryRow {
+  id: string;
+  webhookId: string;
+  event: string;
+  payload: unknown;
+  status: string;
+  attempts: number;
+  lastStatusCode: number | null;
+  lastError: string | null;
+  nextRetryAt: Date | null;
+  deadLetteredAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 function mapRuleRowToRule(row: PrismaPolicyRuleRow): PolicyRule {
   return {
     id: row.id,
@@ -143,6 +180,40 @@ function mapVelocityRowToRecord(row: PrismaVelocityTrackingRow): VelocityRecord 
     policyId: row.policyId,
     amount: row.amount,
     timestamp: row.timestamp.toISOString(),
+  };
+}
+
+function mapTenantRowToTenant(row: PrismaTenantRow): Tenant {
+  return {
+    id: row.id,
+    name: row.name,
+    apiKeyHash: row.apiKeyHash,
+    tier: row.tier as TenantTier,
+    monthlyGasQuotaXlm: row.monthlyGasQuotaXlm,
+    monthlyGasUsedXlm: row.monthlyGasUsedXlm,
+    quotaResetAt: row.quotaResetAt.toISOString(),
+    allowedDomains: Array.isArray(row.allowedDomains)
+      ? (row.allowedDomains as string[])
+      : [],
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function mapWebhookDeliveryRowToDelivery(row: PrismaWebhookDeliveryRow): WebhookDelivery {
+  return {
+    id: row.id,
+    webhookId: row.webhookId,
+    event: row.event,
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    status: row.status as WebhookDeliveryStatus,
+    attempts: row.attempts,
+    lastStatusCode: row.lastStatusCode ?? undefined,
+    lastError: row.lastError ?? undefined,
+    nextRetryAt: row.nextRetryAt ? row.nextRetryAt.toISOString() : undefined,
+    deadLetteredAt: row.deadLetteredAt ? row.deadLetteredAt.toISOString() : undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -338,6 +409,173 @@ export class PrismaWalletRegistry implements WalletRegistry {
       }
       throw err;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PrismaTenantStore
+// ---------------------------------------------------------------------------
+
+export class PrismaTenantStore implements TenantStore {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient = getPrismaClient()) {
+    this.prisma = prisma;
+  }
+
+  async createTenant(tenant: Tenant): Promise<Tenant> {
+    const row = await this.prisma.tenant.upsert({
+      where: { id: tenant.id },
+      create: {
+        id: tenant.id,
+        name: tenant.name,
+        apiKeyHash: tenant.apiKeyHash,
+        tier: tenant.tier,
+        monthlyGasQuotaXlm: tenant.monthlyGasQuotaXlm,
+        monthlyGasUsedXlm: tenant.monthlyGasUsedXlm ?? '0',
+        quotaResetAt: new Date(tenant.quotaResetAt),
+        allowedDomains: tenant.allowedDomains ?? [],
+      },
+      update: {
+        name: tenant.name,
+        apiKeyHash: tenant.apiKeyHash,
+        tier: tenant.tier,
+        monthlyGasQuotaXlm: tenant.monthlyGasQuotaXlm,
+        allowedDomains: tenant.allowedDomains ?? [],
+      },
+    });
+    return mapTenantRowToTenant(row as unknown as PrismaTenantRow);
+  }
+
+  async getTenant(tenantId: string): Promise<Tenant | null> {
+    const row = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    return row ? mapTenantRowToTenant(row as unknown as PrismaTenantRow) : null;
+  }
+
+  async getTenantByApiKeyHash(apiKeyHash: string): Promise<Tenant | null> {
+    const row = await this.prisma.tenant.findUnique({ where: { apiKeyHash } });
+    return row ? mapTenantRowToTenant(row as unknown as PrismaTenantRow) : null;
+  }
+
+  async listTenants(): Promise<Tenant[]> {
+    const rows = await this.prisma.tenant.findMany({ orderBy: { createdAt: 'asc' } });
+    return rows.map((row) => mapTenantRowToTenant(row as unknown as PrismaTenantRow));
+  }
+
+  async addGasUsage(tenantId: string, amountXlm: string): Promise<Tenant> {
+    const row = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: { monthlyGasUsedXlm: { increment: amountXlm } },
+    });
+    return mapTenantRowToTenant(row as unknown as PrismaTenantRow);
+  }
+
+  async resetQuota(tenantId: string, nextResetAt: Date): Promise<Tenant> {
+    const row = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: { monthlyGasUsedXlm: '0', quotaResetAt: nextResetAt },
+    });
+    return mapTenantRowToTenant(row as unknown as PrismaTenantRow);
+  }
+
+  async deleteTenant(tenantId: string): Promise<boolean> {
+    try {
+      await this.prisma.tenant.delete({ where: { id: tenantId } });
+      return true;
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) {
+        return false;
+      }
+      throw err;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PrismaWebhookDeliveryStore
+// ---------------------------------------------------------------------------
+
+export class PrismaWebhookDeliveryStore implements WebhookDeliveryStore {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient = getPrismaClient()) {
+    this.prisma = prisma;
+  }
+
+  async createDelivery(
+    delivery: Omit<WebhookDelivery, 'createdAt' | 'updatedAt'>,
+  ): Promise<WebhookDelivery> {
+    const row = await this.prisma.webhookDelivery.create({
+      data: {
+        id: delivery.id,
+        webhookId: delivery.webhookId,
+        event: delivery.event,
+        payload: (delivery.payload ?? {}) as object,
+        status: delivery.status,
+        attempts: delivery.attempts ?? 0,
+        lastStatusCode: delivery.lastStatusCode ?? null,
+        lastError: delivery.lastError ?? null,
+        nextRetryAt: delivery.nextRetryAt ? new Date(delivery.nextRetryAt) : null,
+        deadLetteredAt: delivery.deadLetteredAt ? new Date(delivery.deadLetteredAt) : null,
+      },
+    });
+    return mapWebhookDeliveryRowToDelivery(row as unknown as PrismaWebhookDeliveryRow);
+  }
+
+  async getDelivery(deliveryId: string): Promise<WebhookDelivery | null> {
+    const row = await this.prisma.webhookDelivery.findUnique({ where: { id: deliveryId } });
+    return row ? mapWebhookDeliveryRowToDelivery(row as unknown as PrismaWebhookDeliveryRow) : null;
+  }
+
+  async listDeliveries(webhookId: string): Promise<WebhookDelivery[]> {
+    const rows = await this.prisma.webhookDelivery.findMany({
+      where: { webhookId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) =>
+      mapWebhookDeliveryRowToDelivery(row as unknown as PrismaWebhookDeliveryRow),
+    );
+  }
+
+  async updateDelivery(
+    deliveryId: string,
+    patch: Partial<WebhookDelivery>,
+  ): Promise<WebhookDelivery> {
+    const row = await this.prisma.webhookDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.attempts !== undefined ? { attempts: patch.attempts } : {}),
+        ...(patch.lastStatusCode !== undefined
+          ? { lastStatusCode: patch.lastStatusCode ?? null }
+          : {}),
+        ...(patch.lastError !== undefined ? { lastError: patch.lastError ?? null } : {}),
+        ...(patch.nextRetryAt !== undefined
+          ? { nextRetryAt: patch.nextRetryAt ? new Date(patch.nextRetryAt) : null }
+          : {}),
+        ...(patch.deadLetteredAt !== undefined
+          ? { deadLetteredAt: patch.deadLetteredAt ? new Date(patch.deadLetteredAt) : null }
+          : {}),
+      },
+    });
+    return mapWebhookDeliveryRowToDelivery(row as unknown as PrismaWebhookDeliveryRow);
+  }
+
+  async markDeadLettered(
+    deliveryId: string,
+    error: string,
+    deadLetteredAt: Date = new Date(),
+  ): Promise<WebhookDelivery> {
+    const row = await this.prisma.webhookDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: 'dead_lettered',
+        lastError: error,
+        nextRetryAt: null,
+        deadLetteredAt,
+      },
+    });
+    return mapWebhookDeliveryRowToDelivery(row as unknown as PrismaWebhookDeliveryRow);
   }
 }
 

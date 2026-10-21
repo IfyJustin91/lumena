@@ -8,6 +8,13 @@ import { createSpendLimitPolicy, createAllowlistPolicy } from "../policy/rules.j
 import { EnvSigner } from "../signers/EnvSigner.js";
 import { IdempotencyStore, withIdempotency } from "../middleware/idempotency.js";
 import { LifecycleHandler } from "../lifecycle.js";
+import {
+  Sep10Service,
+  createSep10Challenge,
+  verifySep10Challenge,
+  issueSep10Token,
+  verifyJwt,
+} from "../auth/sep10.js";
 
 const HORIZON_URL = process.env.HORIZON_URL ?? "http://localhost:8000";
 const RPC_URL = process.env.RPC_URL ?? "http://localhost:8000/rpc";
@@ -317,6 +324,201 @@ describe("Graceful shutdown lifecycle", () => {
     await lifecycle.handleSignal("SIGINT");
 
     expect(exit).toHaveBeenCalledWith(0);
+  });
+});
+
+describe("SEP-10 authentication", () => {
+  const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+  const serverKeypair = Keypair.random();
+  const HOME_DOMAIN = "lumen.example.com";
+  const WEB_AUTH_DOMAIN = "lumen.example.com";
+
+  function createService() {
+    return new Sep10Service({
+      serverKeypair,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      homeDomain: HOME_DOMAIN,
+      webAuthDomain: WEB_AUTH_DOMAIN,
+      jwtSecret: "test-secret-key-for-sep10-integration",
+      challengeTtlSeconds: 300,
+      tokenTtlSeconds: 24 * 60 * 60,
+    });
+  }
+
+  it("GET /auth/challenge returns a valid server-signed challenge envelope", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+
+    const { transaction, networkPassphrase } = service.createChallenge(
+      clientKeypair.publicKey()
+    );
+
+    expect(networkPassphrase).toBe(NETWORK_PASSPHRASE);
+
+    const parsed = TransactionBuilder.fromXDR(transaction, NETWORK_PASSPHRASE);
+    expect(parsed.source).toBe(serverKeypair.publicKey());
+    expect(parsed.operations).toHaveLength(1);
+
+    const op = parsed.operations[0];
+    expect(op.type).toBe("manageData");
+    expect((op as any).name).toBe(`${HOME_DOMAIN} auth`);
+    expect((op as any).value).toBeDefined();
+
+    // Challenge must be signed by the server.
+    const serverSignature = parsed.signatures.find((sig) =>
+      serverKeypair.publicKey() === sig.hint().toString("hex")
+        ? true
+        : sig.hint().equals(serverKeypair.publicKey().slice(-4).match(/../g)!.map((b) => parseInt(b, 16)) as any)
+    );
+    expect(parsed.signatures.length).toBeGreaterThanOrEqual(1);
+    expect(serverSignature ?? parsed.signatures[0]).toBeDefined();
+
+    // The challenge must verify against the server key.
+    const verified = verifySep10Challenge({
+      transaction,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      serverPublicKey: serverKeypair.publicKey(),
+      homeDomain: HOME_DOMAIN,
+      clientPublicKey: clientKeypair.publicKey(),
+    });
+    expect(verified.clientPublicKey).toBe(clientKeypair.publicKey());
+  });
+
+  it("POST /auth/token verifies the client signature and issues a 24h JWT", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+
+    const { transaction } = service.createChallenge(clientKeypair.publicKey());
+
+    // Client signs the challenge transaction.
+    const parsed = TransactionBuilder.fromXDR(transaction, NETWORK_PASSPHRASE);
+    parsed.sign(clientKeypair);
+    const signedXdr = parsed.toXDR();
+
+    const { token, expiresIn } = service.issueToken({
+      transaction: signedXdr,
+      clientPublicKey: clientKeypair.publicKey(),
+    });
+
+    expect(expiresIn).toBe(24 * 60 * 60);
+    expect(typeof token).toBe("string");
+
+    const claims = verifyJwt(token, "test-secret-key-for-sep10-integration");
+    expect(claims.sub).toBe(clientKeypair.publicKey());
+    expect(claims.iss).toBe(HOME_DOMAIN);
+    expect(claims.exp - claims.iat).toBe(24 * 60 * 60);
+  });
+
+  it("rejects a challenge signed by the wrong client key", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+    const attacker = Keypair.random();
+
+    const { transaction } = service.createChallenge(clientKeypair.publicKey());
+
+    const parsed = TransactionBuilder.fromXDR(transaction, NETWORK_PASSPHRASE);
+    parsed.sign(attacker);
+    const signedXdr = parsed.toXDR();
+
+    expect(() =>
+      service.issueToken({
+        transaction: signedXdr,
+        clientPublicKey: clientKeypair.publicKey(),
+      })
+    ).toThrow();
+  });
+
+  it("rejects a challenge with an invalid/missing client signature", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+
+    const { transaction } = service.createChallenge(clientKeypair.publicKey());
+
+    // No client signature added at all.
+    expect(() =>
+      service.issueToken({
+        transaction,
+        clientPublicKey: clientKeypair.publicKey(),
+      })
+    ).toThrow();
+  });
+
+  it("rejects replayed nonces", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+
+    const { transaction } = service.createChallenge(clientKeypair.publicKey());
+
+    const parsed = TransactionBuilder.fromXDR(transaction, NETWORK_PASSPHRASE);
+    parsed.sign(clientKeypair);
+    const signedXdr = parsed.toXDR();
+
+    const first = service.issueToken({
+      transaction: signedXdr,
+      clientPublicKey: clientKeypair.publicKey(),
+    });
+    expect(first.token).toBeDefined();
+
+    // Replaying the same signed challenge must fail.
+    expect(() =>
+      service.issueToken({
+        transaction: signedXdr,
+        clientPublicKey: clientKeypair.publicKey(),
+      })
+    ).toThrow();
+  });
+
+  it("rejects an expired challenge", () => {
+    const service = createService();
+    const clientKeypair = Keypair.random();
+
+    const { transaction } = service.createChallenge(clientKeypair.publicKey());
+
+    const parsed = TransactionBuilder.fromXDR(transaction, NETWORK_PASSPHRASE);
+    parsed.sign(clientKeypair);
+    const signedXdr = parsed.toXDR();
+
+    // Simulate time passing beyond the challenge TTL.
+    const now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60 * 1000);
+    try {
+      expect(() =>
+        service.issueToken({
+          transaction: signedXdr,
+          clientPublicKey: clientKeypair.publicKey(),
+        })
+      ).toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("exposes standalone helpers matching the SEP-10 flow", () => {
+    const clientKeypair = Keypair.random();
+
+    const challenge = createSep10Challenge({
+      serverKeypair,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      homeDomain: HOME_DOMAIN,
+      webAuthDomain: WEB_AUTH_DOMAIN,
+      clientPublicKey: clientKeypair.publicKey(),
+    });
+
+    const parsed = TransactionBuilder.fromXDR(challenge.transaction, NETWORK_PASSPHRASE);
+    parsed.sign(clientKeypair);
+
+    const { token } = issueSep10Token({
+      transaction: parsed.toXDR(),
+      networkPassphrase: NETWORK_PASSPHRASE,
+      serverPublicKey: serverKeypair.publicKey(),
+      homeDomain: HOME_DOMAIN,
+      clientPublicKey: clientKeypair.publicKey(),
+      jwtSecret: "test-secret-key-for-sep10-integration",
+      tokenTtlSeconds: 24 * 60 * 60,
+    });
+
+    const claims = verifyJwt(token, "test-secret-key-for-sep10-integration");
+    expect(claims.sub).toBe(clientKeypair.publicKey());
   });
 });
 

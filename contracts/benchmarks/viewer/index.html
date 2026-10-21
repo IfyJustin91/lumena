@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lumena · Soroban Benchmark Viewer</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --blue: #58a6ff;
+      --accent: #58a6ff;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    header .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    header .badge {
+      margin-left: auto;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge.pass { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+    .badge.fail { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.3); }
+    .badge.loading { background: rgba(88,166,255,.1); color: var(--blue); border: 1px solid rgba(88,166,255,.2); }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .summary-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+    }
+
+    .stat-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .stat-card .value {
+      font-size: 26px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .value.green { color: var(--green); }
+    .value.red { color: var(--red); }
+    .value.blue { color: var(--blue); }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: var(--text);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 28px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead {
+      background: rgba(48,54,61,.6);
+    }
+
+    th {
+      padding: 10px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    th.right, td.right { text-align: right; }
+
+    tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+
+    tr:hover td { background: rgba(48,54,61,.4); }
+
+    td { padding: 10px 16px; vertical-align: middle; }
+
+    td.name { font-family: 'SFMono-Regular', Consolas, monospace; color: var(--blue); }
+
+    .bar-cell { min-width: 140px; }
+
+    .bar-outer {
+      background: rgba(48,54,61,.8);
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .bar-inner {
+      height: 100%;
+      border-radius: 4px;
+      transition: width .4s ease;
+    }
+
+    .bar-inner.ok { background: var(--green); }
+    .bar-inner.warn { background: var(--yellow); }
+    .bar-inner.fail { background: var(--red); }
+
+    .pct-label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+      text-align: right;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .status-badge.pass { background: rgba(63,185,80,.15); color: var(--green); }
+    .status-badge.fail { background: rgba(248,81,73,.15); color: var(--red); }
+
+    .budget-info {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .error-box {
+      background: rgba(248,81,73,.1);
+      border: 1px solid rgba(248,81,73,.3);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      color: var(--red);
+      font-family: monospace;
+    }
+
+    .loader {
+      text-align: center;
+      padding: 48px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .timestamp {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    .refresh-btn {
+      background: rgba(88,166,255,.1);
+      border: 1px solid rgba(88,166,255,.3);
+      color: var(--blue);
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background .2s;
+    }
+    .refresh-btn:hover { background: rgba(88,166,255,.2); }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-left: auto;
+    }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚡ Soroban Resource Footprint Viewer</h1>
+    <div class="subtitle">Lumena · CPU Instructions &amp; Memory Budget Profiling</div>
+  </div>
+  <div class="header-actions">
+    <button class="refresh-btn" onclick="load()">↺ Refresh</button>
+    <span id="global-badge" class="badge loading">Loading…</span>
+  </div>
+</header>
+
+<main>
+  <div id="root"><div class="loader">Loading benchmark results…</div></div>
+</main>
+
+<footer>
+  Lumena Soroban Benchmark Viewer &mdash; Results from <code>cargo run --package benchmarks --bin benchmarks</code>
+</footer>
+
+<script>
+const fmt = n => n.toLocaleString();
+const fmtPct = p => p.toFixed(1) + '%';
+
+function barClass(pct) {
+  if (pct >= 90) return 'fail';
+  if (pct >= 70) return 'warn';
+  return 'ok';
+}
+
+function barWidth(pct) {
+  return Math.min(pct, 100).toFixed(1) + '%';
+}
+
+function renderBar(value, budget, pct) {
+  const cls = barClass(pct);
+  return `
+    <div class="bar-outer">
+      <div class="bar-inner ${cls}" style="width:${barWidth(pct)}"></div>
+    </div>
+    <div class="pct-label">${fmt(value)} / ${fmt(budget)} (${fmtPct(pct)})</div>
+  `;
+}
+
+function render(data) {
+  const { results, all_pass, timestamp } = data;
+
+  const passed = results.filter(r => r.within_budget).length;
+  const failed = results.length - passed;
+  const avgCpuPct = (results.reduce((a, r) => a + r.cpu_pct, 0) / results.length).toFixed(1);
+  const avgMemPct = (results.reduce((a, r) => a + r.mem_pct, 0) / results.length).toFixed(1);
+  const totalCpu = results.reduce((a, r) => a + r.cpu_instructions, 0);
+  const totalMem = results.reduce((a, r) => a + r.memory_bytes, 0);
+
+  // Update global badge
+  const badge = document.getElementById('global-badge');
+  badge.textContent = all_pass ? '✓ All Pass' : `✗ ${failed} Failed`;
+  badge.className = 'badge ' + (all_pass ? 'pass' : 'fail');
+
+  const ts = timestamp
+    ? new Date(parseInt(timestamp, 10) * 1000).toLocaleString()
+    : 'unknown';
+
+  const rows = results.map(r => `
+    <tr>
+      <td class="name">${r.name}</td>
+      <td class="right">${fmt(r.cpu_instructions)}</td>
+      <td class="bar-cell">${renderBar(r.cpu_instructions, r.cpu_budget, r.cpu_pct)}</td>
+      <td class="right">${fmt(r.memory_bytes)}</td>
+      <td class="bar-cell">${renderBar(r.memory_bytes, r.mem_budget, r.mem_pct)}</td>
+      <td>
+        <span class="status-badge ${r.within_budget ? 'pass' : 'fail'}">
+          ${r.within_budget ? '✓ PASS' : '✗ FAIL'}
+        </span>
+      </td>
+    </tr>
+  `).join('');
+
+  document.getElementById('root').innerHTML = `
+    <div class="timestamp">Last run: ${ts}</div>
+
+    <div class="summary-row">
+      <div class="stat-card">
+        <div class="label">Total Benchmarks</div>
+        <div class="value blue">${results.length}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Passed</div>
+        <div class="value green">${passed}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Failed</div>
+        <div class="value ${failed > 0 ? 'red' : 'green'}">${failed}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Avg CPU Budget Used</div>
+        <div class="value ${parseFloat(avgCpuPct) >= 70 ? 'red' : 'blue'}">${avgCpuPct}%</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Avg Mem Budget Used</div>
+        <div class="value ${parseFloat(avgMemPct) >= 70 ? 'red' : 'blue'}">${avgMemPct}%</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Total CPU Instructions</div>
+        <div class="value blue" style="font-size:18px">${fmt(totalCpu)}</div>
+      </div>
+    </div>
+
+    <div class="section-title">Resource Usage Table</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th>
+            <th class="right">CPU Instructions</th>
+            <th>CPU vs Budget</th>
+            <th class="right">Memory Bytes</th>
+            <th>Mem vs Budget</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+
+    ${!all_pass ? `
+    <div class="error-box">
+      ⚠️  ${failed} benchmark(s) exceeded resource budgets.
+      Update thresholds in <code>contracts/benchmarks/src/main.rs</code>
+      if the increase is intentional.
+    </div>` : ''}
+  `;
+}
+
+function renderError(msg) {
+  document.getElementById('global-badge').textContent = 'Error';
+  document.getElementById('global-badge').className = 'badge fail';
+  document.getElementById('root').innerHTML = `
+    <div class="error-box">
+      <strong>Could not load benchmark results</strong><br/><br/>
+      ${msg}<br/><br/>
+      Run the benchmark suite first:<br/>
+      <code>cargo run --package benchmarks --bin benchmarks</code>
+    </div>
+  `;
+}
+
+async function load() {
+  document.getElementById('root').innerHTML = '<div class="loader">Loading…</div>';
+  document.getElementById('global-badge').textContent = 'Loading…';
+  document.getElementById('global-badge').className = 'badge loading';
+
+  try {
+    const res = await fetch('/api/results');
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      renderError(body.error || res.statusText);
+      return;
+    }
+    const data = await res.json();
+    render(data);
+  } catch (e) {
+    renderError(e.message);
+  }
+}
+
+// Initial load
+load();
+// Auto-refresh every 10 seconds when the page is visible
+setInterval(() => {
+  if (!document.hidden) load();
+}, 10000);
+</script>
+</body>
+</html>

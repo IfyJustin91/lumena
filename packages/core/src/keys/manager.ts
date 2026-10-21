@@ -6,6 +6,11 @@ import {
   importKeystore,
   type KeystoreEnvelope,
 } from "./keystore";
+import {
+  deriveKeypairFromMnemonic,
+  generateMnemonic,
+  validateMnemonic,
+} from "./mnemonic";
 
 export interface StoredKey {
   publicKey: string;
@@ -88,6 +93,34 @@ export class KeyManager {
 
   generateKeypair(): Keypair {
     return Keypair.random();
+  }
+
+  /**
+   * Generates a new BIP-39 mnemonic phrase and derives the default Stellar
+   * keypair (SEP-0005 account index 0) from it.
+   */
+  createFromMnemonic(strength: 128 | 256 = 128): {
+    mnemonic: string;
+    keypair: Keypair;
+  } {
+    const mnemonic = generateMnemonic(strength);
+    const keypair = deriveKeypairFromMnemonic(mnemonic);
+    return { mnemonic, keypair };
+  }
+
+  /**
+   * Recovers a Stellar keypair from an existing BIP-39 mnemonic phrase using
+   * SEP-0005 derivation.
+   */
+  recoverFromMnemonic(
+    mnemonic: string,
+    passphrase?: string,
+    accountIndex?: number,
+  ): Keypair {
+    if (!validateMnemonic(mnemonic)) {
+      throw new Error("Invalid mnemonic phrase");
+    }
+    return deriveKeypairFromMnemonic(mnemonic, passphrase, accountIndex);
   }
 
   async deriveFromOAuth(provider: string, token: string, salt?: string): Promise<Keypair> {

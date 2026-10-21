@@ -264,6 +264,125 @@ describe("WebhookDispatcher Unit Tests", () => {
     expect(totalTime).toBeGreaterThanOrEqual(600); // Allow some margin
   });
 
+  it("schedules retries at 1m, 5m, 15m, 1h, and 6h on 500 responses", async () => {
+    const dispatcher = createDispatcher({ timeoutMs: 500 });
+    const fetchMock = vi.fn().mockResolvedValue(new Response("Internal Server Error", { status: 500 }));
+    globalThis.fetch = fetchMock;
+
+    dispatcher.register({
+      id: "wh-pipeline",
+      url: "https://example.com/pipeline",
+      secret,
+      events: ["transaction.cosigned"],
+    });
+
+    const results = await dispatcher.dispatch("transaction.cosigned", { txHash: "abc" });
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(false);
+
+    const deliveries = await dispatcher.listDeliveries("wh-pipeline");
+    expect(deliveries).toHaveLength(1);
+    const delivery = deliveries[0];
+    expect(delivery.status).toBe("pending");
+    expect(delivery.attempts).toBe(1);
+    expect(delivery.lastError).toBe("HTTP 500: Internal Server Error");
+
+    const expectedDelays = [60_000, 300_000, 900_000, 3_600_000, 21_600_000];
+    expect(delivery.retrySchedule).toEqual(expectedDelays);
+    expect(delivery.nextRetryAt).toBeTruthy();
+    expect(delivery.nextRetryAt! - delivery.timestamp).toBeGreaterThanOrEqual(expectedDelays[0] - 1000);
+  });
+
+  it("moves exhausted deliveries to the dead-letter queue with the last error persisted", async () => {
+    const dispatcher = createDispatcher({ timeoutMs: 500 });
+    let calls = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      calls++;
+      return new Response(`failure-${calls}`, { status: 500 });
+    });
+
+    dispatcher.register({
+      id: "wh-dlq",
+      url: "https://example.com/dlq",
+      secret,
+      events: ["*"],
+    });
+
+    const results = await dispatcher.dispatch("transaction.cosigned", { txHash: "dlq" });
+    expect(results).toHaveLength(1);
+    const deliveryId = results[0].deliveryId;
+
+    // Simulate the retry pipeline exhausting all scheduled retries.
+    for (let i = 0; i < 5; i++) {
+      await dispatcher.processRetry(deliveryId);
+    }
+
+    const dlq = await dispatcher.listDeadLetters();
+    expect(dlq).toHaveLength(1);
+    expect(dlq[0]).toMatchObject({
+      deliveryId,
+      webhookId: "wh-dlq",
+      status: "dead",
+      attempts: 6,
+      lastError: "HTTP 500: failure-6",
+    });
+    expect(dlq[0].deadLetteredAt).toBeTruthy();
+
+    const deliveries = await dispatcher.listDeliveries("wh-dlq");
+    expect(deliveries[0].status).toBe("dead");
+    expect(deliveries[0].lastError).toBe("HTTP 500: failure-6");
+  });
+
+  it("lists deliveries per webhook and retries a dead-lettered delivery on demand", async () => {
+    const dispatcher = createDispatcher({ timeoutMs: 500 });
+    let shouldFail = true;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      if (shouldFail) {
+        return new Response("Internal Server Error", { status: 500 });
+      }
+      return new Response("OK", { status: 200 });
+    });
+
+    dispatcher.register({
+      id: "wh-manual",
+      url: "https://example.com/manual",
+      secret,
+      events: ["*"],
+    });
+    dispatcher.register({
+      id: "wh-other",
+      url: "https://example.com/other",
+      secret,
+      events: ["*"],
+    });
+
+    const results = await dispatcher.dispatch("transaction.cosigned", { txHash: "manual" });
+    const deliveryId = results[0].deliveryId;
+
+    for (let i = 0; i < 5; i++) {
+      await dispatcher.processRetry(deliveryId);
+    }
+
+    const manualDeliveries = await dispatcher.listDeliveries("wh-manual");
+    expect(manualDeliveries).toHaveLength(1);
+    expect(manualDeliveries[0].status).toBe("dead");
+
+    const otherDeliveries = await dispatcher.listDeliveries("wh-other");
+    expect(otherDeliveries).toHaveLength(1);
+    expect(otherDeliveries[0].deliveryId).not.toBe(deliveryId);
+
+    shouldFail = false;
+    const retried = await dispatcher.retryDelivery(deliveryId);
+    expect(retried.success).toBe(true);
+    expect(retried.status).toBe("delivered");
+
+    const afterRetry = await dispatcher.listDeliveries("wh-manual");
+    expect(afterRetry[0].status).toBe("delivered");
+    expect(await dispatcher.listDeadLetters()).toHaveLength(0);
+
+    await expect(dispatcher.retryDelivery("missing-delivery")).rejects.toThrow();
+  });
+
   it("persists delivery history and reloads it from a new dispatcher", async () => {
     const logPath = path.join(tempDir, "persistent-deliveries.jsonl");
     const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
@@ -300,5 +419,35 @@ describe("WebhookDispatcher Unit Tests", () => {
     expect(history[0].timestamp).toBeTruthy();
     expect(history[0].deliveredAt).toBeTruthy();
     expect(JSON.stringify(history)).not.toContain(secret);
+  });
+
+  it("caps delivery log to maxDeliveryLogSize and evicts oldest entries", async () => {
+    const logPath = path.join(tempDir, "capped-deliveries.jsonl");
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    globalThis.fetch = fetchMock;
+
+    const dispatcher = new WebhookDispatcher({
+      maxRetries: 0,
+      deliveryLogPath: logPath,
+      maxDeliveryLogSize: 500,
+      webhooks: [
+        {
+          id: "wh-capped",
+          url: "https://example.com/capped",
+          secret,
+          events: ["transaction.sponsored"],
+        },
+      ],
+    });
+
+    for (let i = 0; i < 600; i++) {
+      await dispatcher.dispatch("transaction.sponsored", { index: i });
+    }
+
+    const log = await dispatcher.getDeliveryLog();
+    expect(log).toHaveLength(500);
+    // Oldest 100 entries (indices 0..99) should be evicted; entries remaining should start from index 100
+    expect((log[0].data as { index: number }).index).toBe(100);
+    expect((log[499].data as { index: number }).index).toBe(599);
   });
 });

@@ -214,3 +214,11 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full security policy, vulnerabi
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-357 -->
+- #357: [Feature] server: DELETE /policy/:walletId is not wrapped in wrapHandler, so thrown errors bypass the global error handler
+
+<!-- handsoff-issue-358 -->
+- #358: [Feature] token-sep41: zero-amount transfers succeed silently instead of being rejected

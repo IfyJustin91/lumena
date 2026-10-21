@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { ValidationError } from "../errors.js";
 
 export type Role = "admin" | "operator" | "auditor";
@@ -9,11 +9,29 @@ export interface AuthUser {
   role: Role;
 }
 
+export type TenantTier = "free" | "pro" | "enterprise";
+
+export interface Tenant {
+  id: string;
+  name: string;
+  apiKeyHash: string;
+  tier: TenantTier;
+  monthlyGasQuotaXlm: number;
+  monthlyGasUsedXlm: number;
+  allowedDomains: string[];
+}
+
+export interface TenantStore {
+  findByApiKeyHash(hash: string): Tenant | undefined;
+  get(id: string): Tenant | undefined;
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       user?: AuthUser;
+      tenant?: Tenant;
     }
   }
 }
@@ -21,6 +39,43 @@ declare global {
 export interface AuthMiddlewareOpts {
   apiKey?: string;
   jwtSecret?: string;
+  tenantStore?: TenantStore;
+}
+
+/**
+ * Hash a presented API key with SHA-256 (hex) for lookup against stored hashes.
+ */
+export function hashApiKey(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+function extractOriginHost(origin: string | undefined): string | undefined {
+  if (!origin) {
+    return undefined;
+  }
+  try {
+    return new URL(origin).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isDomainAllowed(origin: string | undefined, allowedDomains: string[]): boolean {
+  if (allowedDomains.length === 0) {
+    return true;
+  }
+  const host = extractOriginHost(origin);
+  if (!host) {
+    return false;
+  }
+  return allowedDomains.some((domain) => {
+    const normalized = domain.toLowerCase().trim();
+    if (normalized.startsWith("*.")) {
+      const suffix = normalized.slice(1); // ".example.com"
+      return host.endsWith(suffix) || host === normalized.slice(2);
+    }
+    return host === normalized;
+  });
 }
 
 interface JwtPayload {
@@ -124,6 +179,7 @@ export function apiKeyAuth(opts: AuthMiddlewareOpts = {}) {
   return (req: Request, _res: Response, next: NextFunction) => {
     const expectedKey = opts.apiKey || process.env.LUMEN_API_KEY;
     const jwtSecret = opts.jwtSecret || process.env.LUMEN_JWT_SECRET;
+    const tenantStore = opts.tenantStore;
 
     const headerKey = req.headers["x-api-key"] as string | undefined;
     const authHeader = req.headers.authorization;
@@ -145,16 +201,84 @@ export function apiKeyAuth(opts: AuthMiddlewareOpts = {}) {
       // Invalid JWT: fall through to API-key checks (if any) or reject below.
     }
 
+    const providedKey = headerKey || bearerKey;
+
+    // Tenant-aware authentication takes precedence when a store is configured.
+    if (tenantStore) {
+      if (!providedKey) {
+        return next(
+          new ValidationError("Unauthorized: Invalid or missing API key", undefined, 401),
+        );
+      }
+
+      const tenant = tenantStore.findByApiKeyHash(hashApiKey(providedKey));
+      if (!tenant) {
+        return next(
+          new ValidationError("Unauthorized: Invalid or missing API key", undefined, 401),
+        );
+      }
+
+      const origin = req.headers.origin as string | undefined;
+      if (!isDomainAllowed(origin, tenant.allowedDomains)) {
+        return next(
+          new ValidationError("Forbidden: Origin not allowed for this tenant", undefined, 403),
+        );
+      }
+
+      req.tenant = tenant;
+      return next();
+    }
+
     // If no API key configured in server environment/options, pass through
     if (!expectedKey) {
       return next();
     }
 
-    const providedKey = headerKey || bearerKey;
-
     if (!providedKey || providedKey !== expectedKey) {
       return next(
         new ValidationError("Unauthorized: Invalid or missing API key", undefined, 401),
+      );
+    }
+
+    next();
+  };
+}
+
+function startOfNextMonthUtc(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
+}
+
+/**
+ * Enforce the tenant's monthly gas quota. Returns 429 with descriptive
+ * rate-limit headers when the quota is exhausted.
+ */
+export function tenantQuota(opts: { tenantStore?: TenantStore } = {}) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const tenant = req.tenant;
+    if (!tenant) {
+      return next();
+    }
+
+    const store = opts.tenantStore;
+    const current = (store && store.get(tenant.id)) || tenant;
+    const limit = current.monthlyGasQuotaXlm;
+    const used = current.monthlyGasUsedXlm;
+    const remaining = Math.max(0, limit - used);
+    const reset = Math.floor(startOfNextMonthUtc().getTime() / 1000);
+
+    res.setHeader("X-RateLimit-Limit", String(limit));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(reset));
+
+    if (used >= limit) {
+      const retryAfter = Math.max(1, reset - Math.floor(Date.now() / 1000));
+      res.setHeader("Retry-After", String(retryAfter));
+      return next(
+        new ValidationError(
+          `Too Many Requests: monthly gas quota of ${limit} XLM exhausted for tenant ${current.id}`,
+          undefined,
+          429,
+        ),
       );
     }
 

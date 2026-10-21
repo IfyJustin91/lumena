@@ -84,6 +84,7 @@ const serverResult = createServer({
     : undefined,
   max: process.env.RATE_LIMIT_MAX ? parseInt(process.env.RATE_LIMIT_MAX) : undefined,
 });
+serverResult.sponsorMonitorService.start();
 
 // Install SIGINT/SIGTERM handlers so Kubernetes pod rollouts drain in-flight
 // co-sign and submit operations before the process exits cleanly (code 0).

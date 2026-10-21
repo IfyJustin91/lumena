@@ -1,0 +1,14 @@
+{
+  "name": "@lumen/benchmark-viewer",
+  "version": "0.1.0",
+  "description": "Web viewer for Lumena Soroban resource footprint benchmark results",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.22.3"
+  }
+}

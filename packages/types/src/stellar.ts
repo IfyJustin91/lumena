@@ -1,4 +1,4 @@
-export type StellarNetwork = "testnet" | "mainnet" | "local";
+export type StellarNetwork = "testnet" | "mainnet" | "local" | "futurenet";
 
 export interface SignerConfig {
   publicKey: string;

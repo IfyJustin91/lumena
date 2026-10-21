@@ -340,6 +340,159 @@ describe("CosignerService Security Validations", () => {
   });
 });
 
+describe("CosignerService Distributed Sequence Allocation & Backoff", () => {
+  const cosignerKeypair = Keypair.random();
+  const signer = new EnvSigner(cosignerKeypair.secret());
+  const client = new StellarClient({ network: "local" });
+  const userKeypair = Keypair.random();
+  const dummyAccount = new Account(userKeypair.publicKey(), "100");
+
+  const buildSignedTx = () => {
+    const tx = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: Networks.STANDALONE,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: Keypair.random().publicKey(),
+          asset: Asset.native(),
+          amount: "10",
+        })
+      )
+      .setTimeout(180)
+      .build();
+    tx.sign(userKeypair);
+    return tx;
+  };
+
+  const createMockAllocator = () => {
+    const reservations = new Map<string, number>();
+    const usedSequences = new Set<string>();
+    let nextSequence = 1000;
+    let conflicts = 0;
+    let released = 0;
+
+    const allocator = {
+      reserve: async (accountId: string) => {
+        const seq = nextSequence++;
+        const token = `${accountId}:${seq}`;
+        reservations.set(token, seq);
+        return { token, sequence: seq.toString() };
+      },
+      release: async (token: string) => {
+        if (reservations.delete(token)) {
+          released++;
+        }
+      },
+      commit: async (token: string) => {
+        const seq = reservations.get(token);
+        if (seq === undefined) return;
+        reservations.delete(token);
+        usedSequences.add(seq.toString());
+      },
+      // Simulates Horizon submission; duplicate sequence numbers yield txBAD_SEQ.
+      submit: async (sequence: string) => {
+        if (usedSequences.has(sequence)) {
+          conflicts++;
+          const err = new Error("txBAD_SEQ") as Error & { result_codes?: unknown };
+          err.result_codes = { transaction: "txBAD_SEQ" };
+          throw err;
+        }
+        usedSequences.add(sequence);
+        return { hash: `hash-${sequence}` };
+      },
+      stats: () => ({ conflicts, released, pending: reservations.size }),
+    };
+
+    return allocator;
+  };
+
+  it("submits 50 concurrent transactions without sequence conflicts", async () => {
+    const policyEngine = new PolicyEngine();
+    const allocator = createMockAllocator();
+    const cosigner = new CosignerService({
+      client,
+      signer,
+      policyEngine,
+      sequenceAllocator: allocator as never,
+      maxSequenceRetries: 5,
+    });
+
+    const items = Array.from({ length: 50 }, () => ({
+      xdr: buildSignedTx().toXDR(),
+      walletAddress: userKeypair.publicKey(),
+    }));
+
+    const results = await Promise.all(items.map((item) => cosigner.cosign(item)));
+
+    expect(results).toHaveLength(50);
+    for (const result of results) {
+      expect(result.approved).toBe(true);
+      expect(result.signedXdr).toBeTruthy();
+    }
+
+    const stats = allocator.stats();
+    expect(stats.conflicts).toBe(0);
+    expect(stats.pending).toBe(0);
+  });
+
+  it("retries with exponential backoff on txBAD_SEQ and eventually succeeds", async () => {
+    const policyEngine = new PolicyEngine();
+    const allocator = createMockAllocator();
+    const cosigner = new CosignerService({
+      client,
+      signer,
+      policyEngine,
+      sequenceAllocator: allocator as never,
+      maxSequenceRetries: 5,
+    });
+
+    const result = await cosigner.cosign({
+      xdr: buildSignedTx().toXDR(),
+      walletAddress: userKeypair.publicKey(),
+    });
+
+    expect(result.approved).toBe(true);
+    expect(result.signedXdr).toBeTruthy();
+    expect(allocator.stats().pending).toBe(0);
+  });
+
+  it("releases the sequence reservation when submission fails", async () => {
+    const policyEngine = new PolicyEngine();
+    const allocator = createMockAllocator();
+    const cosigner = new CosignerService({
+      client,
+      signer,
+      policyEngine,
+      sequenceAllocator: allocator as never,
+      maxSequenceRetries: 2,
+    });
+
+    const failingAllocator = {
+      ...allocator,
+      submit: async () => {
+        throw new Error("txBAD_SEQ");
+      },
+    };
+
+    const failingCosigner = new CosignerService({
+      client,
+      signer,
+      policyEngine,
+      sequenceAllocator: failingAllocator as never,
+      maxSequenceRetries: 2,
+    });
+
+    const result = await failingCosigner.cosign({
+      xdr: buildSignedTx().toXDR(),
+      walletAddress: userKeypair.publicKey(),
+    });
+
+    expect(result.approved).toBe(false);
+    expect(allocator.stats().pending).toBe(0);
+  });
+});
+
 describe("CosignerService Batch Cosigning", () => {
   const cosignerKeypair = Keypair.random();
   const signer = new EnvSigner(cosignerKeypair.secret());

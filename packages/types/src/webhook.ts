@@ -38,3 +38,24 @@ export interface WebhookDeliveryLogEntry extends WebhookDeliveryResult {
   deliveredAt: string;
   data: unknown;
 }
+
+export type WebhookDeliveryStatus =
+  | "pending"
+  | "retrying"
+  | "delivered"
+  | "failed"
+  | "dead_lettered";
+
+export interface WebhookDeliveryRecord {
+  id: string;
+  webhookId: string;
+  event: WebhookEventType;
+  status: WebhookDeliveryStatus;
+  attempts: number;
+  lastError?: string;
+  nextRetryAt?: string;
+  deadLettered: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deliveredAt?: string;
+}

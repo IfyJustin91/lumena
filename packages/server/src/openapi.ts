@@ -37,6 +37,99 @@ export const openApiSpec = {
         },
       },
     },
+    "/auth/challenge": {
+      get: {
+        summary: "SEP-10 Challenge",
+        description:
+          "Generates a SEP-10 challenge transaction envelope signed by the server for the given Stellar account. " +
+          "The client must sign the challenge transaction and submit it to POST /auth/token to obtain a JWT.",
+        security: [],
+        parameters: [
+          {
+            name: "account",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Stellar public key (G...) of the account requesting authentication.",
+            example: "GAD7654...",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "SEP-10 challenge transaction envelope",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    transaction: {
+                      type: "string",
+                      description: "Base64 encoded challenge transaction envelope XDR.",
+                      example: "AAAAAG...",
+                    },
+                    network_passphrase: {
+                      type: "string",
+                      description: "Stellar network passphrase the challenge is valid for.",
+                      example: "Test SDF Network ; September 2015",
+                    },
+                  },
+                  required: ["transaction", "network_passphrase"],
+                },
+              },
+            },
+          },
+          "400": { description: "Missing or invalid account parameter" },
+        },
+      },
+    },
+    "/auth/token": {
+      post: {
+        summary: "SEP-10 Token Exchange",
+        description:
+          "Validates the client signature on a SEP-10 challenge transaction and issues a JWT valid for 24 hours.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  transaction: {
+                    type: "string",
+                    description: "Base64 encoded signed challenge transaction envelope XDR.",
+                    example: "AAAAAG...",
+                  },
+                },
+                required: ["transaction"],
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "JWT issued successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    token: {
+                      type: "string",
+                      description: "Signed JWT valid for 24 hours.",
+                      example: "eyJhbGciOi...",
+                    },
+                  },
+                  required: ["token"],
+                },
+              },
+            },
+          },
+          "400": { description: "Invalid or malformed challenge transaction" },
+          "401": { description: "Challenge signature verification failed or challenge expired" },
+        },
+      },
+    },
     "/cosign": {
       post: {
         summary: "Cosign Transaction",
@@ -81,7 +174,9 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid request validation error" },
+          "401": { description: "Missing or invalid tenant API key" },
           "403": { description: "Transaction denied by policy rules" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -169,7 +264,9 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid request validation error" },
+          "401": { description: "Missing or invalid tenant API key" },
           "403": { description: "Batch denied by policy or fraud rules" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -211,6 +308,8 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -252,6 +351,8 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -297,7 +398,8 @@ export const openApiSpec = {
               },
             },
           },
-          "401": { description: "Missing or invalid API key" },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -322,6 +424,8 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -370,6 +474,8 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid wallet address or pagination parameter" },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -404,6 +510,8 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid wallet address" },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -432,7 +540,8 @@ export const openApiSpec = {
               },
             },
           },
-          "401": { description: "Missing or invalid API key" },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
       post: {
@@ -478,7 +587,9 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
           "409": { description: "A policy already exists for this wallet" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -533,7 +644,9 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "No policy found for wallet" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
       get: {
@@ -557,7 +670,9 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "No policy found for wallet" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
       delete: {
@@ -574,7 +689,9 @@ export const openApiSpec = {
         ],
         responses: {
           "204": { description: "Policy deleted successfully" },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "No policy found for wallet" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -594,6 +711,8 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
       post: {
@@ -617,6 +736,8 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid webhook configuration" },
+          "401": { description: "Missing or invalid tenant API key" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -635,7 +756,9 @@ export const openApiSpec = {
         ],
         responses: {
           "204": { description: "Webhook deleted" },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "Webhook not found" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
       patch: {
@@ -692,7 +815,9 @@ export const openApiSpec = {
             },
           },
           "400": { description: "Invalid patch payload" },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "Webhook not found" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -747,7 +872,102 @@ export const openApiSpec = {
               },
             },
           },
+          "401": { description: "Missing or invalid tenant API key" },
           "404": { description: "Webhook not found" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
+        },
+      },
+    },
+    "/webhooks/{id}/deliveries": {
+      get: {
+        summary: "List Webhook Deliveries",
+        description:
+          "Returns the delivery history for a webhook, including pending retries and deliveries routed to the dead-letter queue (DLQ).",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Webhook ID.",
+          },
+          {
+            name: "status",
+            in: "query",
+            required: false,
+            schema: {
+              type: "string",
+              enum: ["pending", "delivered", "failed", "dlq"],
+            },
+            description: "Filter deliveries by status.",
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+            description: "Maximum number of deliveries to return.",
+          },
+          {
+            name: "offset",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 0, default: 0 },
+            description: "Number of deliveries to skip for pagination.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Webhook delivery history",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    deliveries: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/WebhookDelivery" },
+                    },
+                    total: { type: "integer", example: 12 },
+                  },
+                  required: ["deliveries", "total"],
+                },
+              },
+            },
+          },
+          "401": { description: "Missing or invalid tenant API key" },
+          "404": { description: "Webhook not found" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
+        },
+      },
+    },
+    "/webhooks/deliveries/{id}/retry": {
+      post: {
+        summary: "Retry Webhook Delivery",
+        description:
+          "Re-enqueues a failed or dead-lettered webhook delivery for another attempt using the standard retry pipeline.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Delivery ID.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Delivery re-enqueued for retry",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/WebhookDelivery" },
+              },
+            },
+          },
+          "401": { description: "Missing or invalid tenant API key" },
+          "404": { description: "Delivery not found" },
+          "409": { description: "Delivery is not in a retryable state" },
+          "429": { $ref: "#/components/responses/QuotaExceeded" },
         },
       },
     },
@@ -758,7 +978,47 @@ export const openApiSpec = {
         type: "http",
         scheme: "bearer",
         bearerFormat: "API Key",
-        description: "API key passed in the Authorization: Bearer <api-key> header",
+        description: "Tenant API key passed in the Authorization: Bearer <api-key> header",
+      },
+    },
+    responses: {
+      QuotaExceeded: {
+        description:
+          "Tenant has exceeded its monthly gas quota. Rate limit headers describe the current quota window.",
+        headers: {
+          "X-RateLimit-Limit": {
+            description: "Monthly gas quota for the tenant, in XLM.",
+            schema: { type: "string", example: "100" },
+          },
+          "X-RateLimit-Remaining": {
+            description: "Remaining gas quota for the current period, in XLM.",
+            schema: { type: "string", example: "0" },
+          },
+          "X-RateLimit-Reset": {
+            description: "Unix timestamp (seconds) when the quota window resets.",
+            schema: { type: "string", example: "1735689600" },
+          },
+          "Retry-After": {
+            description: "Seconds until the quota window resets.",
+            schema: { type: "string", example: "3600" },
+          },
+        },
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                error: { type: "string", example: "Monthly gas quota exceeded" },
+                code: { type: "string", example: "QUOTA_EXCEEDED" },
+                tier: { type: "string", example: "free" },
+                monthlyGasQuotaXlm: { type: "string", example: "100" },
+                usedGasXlm: { type: "string", example: "100.5" },
+                resetsAt: { type: "string", format: "date-time" },
+              },
+              required: ["error", "code"],
+            },
+          },
+        },
       },
     },
     schemas: {
@@ -900,11 +1160,11 @@ export const openApiSpec = {
         },
         required: ["url", "secret", "events"],
       },
-    },
-  },
-  security: [
-    {
-      bearerAuth: [],
-    },
-  ],
-};
+      WebhookDelivery: {
+        type: "object",
+        description:
+          "A single webhook delivery attempt record, including retry state and DLQ routing.",
+        properties: {
+          id: { type: "string", example: "550e8400-e29b-41d4-a716-446655440000" },
+          webhookId: { type: "string", example: "550e8400-e29b-41d4-a716-446655440000" },
+          event:

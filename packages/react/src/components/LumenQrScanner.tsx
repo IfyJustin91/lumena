@@ -178,6 +178,9 @@ export function LumenQrScanner({
   const [active, setActive] = useState<boolean>(false);
   const [error, setError] = useState<Error | null>(null);
 
+  // Expose the scanning state under the name used by consumers/tests.
+  const isScanning = active;
+
   const effectiveDecoder = useMemo<LumenQrDecoder>(
     () => decoder ?? defaultDecoder,
     [decoder],
@@ -264,7 +267,15 @@ export function LumenQrScanner({
       try {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         if (!mountedRef.current) {
-          stream.getTracks().forEach((t) => t.stop());
+          // Component unmounted before the promise resolved: release the
+          // freshly acquired stream immediately so the camera is not held.
+          stream.getTracks().forEach((t) => {
+            try {
+              t.stop();
+            } catch {
+              // ignore
+            }
+          });
           return;
         }
         streamRef.current = stream;
@@ -292,13 +303,17 @@ export function LumenQrScanner({
           setFlashOn(false);
         }
 
-        setActive(true);
-        setError(null);
+        if (mountedRef.current) {
+          setActive(true);
+          setError(null);
+        }
 
         // Enumerate devices after permission granted (labels available).
         void enumerateDevices();
       } catch (err) {
-        handleError(err);
+        if (mountedRef.current) {
+          handleError(err);
+        }
       }
     },
     [enumerateDevices, facingMode, handleError, stopStream],
@@ -406,7 +421,31 @@ export function LumenQrScanner({
     }
     return () => {
       mountedRef.current = false;
-      stopStream();
+      // Cancel the decode loop.
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      // Stop every track of the active stream so the camera is released.
+      const stream = streamRef.current;
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+        streamRef.current = null;
+      }
+      // Detach the stream from the video element.
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      // Ensure scanning state is reset.
+      setActive(false);
+      setFlashOn(false);
+      setFlashSupported(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -416,6 +455,7 @@ export function LumenQrScanner({
       className={className}
       style={{ position: 'relative', ...style }}
       data-testid="lumen-qr-scanner"
+      data-scanning={isScanning ? 'true' : 'false'}
     >
       <video
         ref={videoRef}
@@ -445,7 +485,7 @@ export function LumenQrScanner({
           {flashOn ? 'Flash On' : 'Flash Off'}
         </button>
 
-        {!active && (
+        {!isScanning && (
           <button
             type="button"
             data-testid="lumen-qr-start"
@@ -483,5 +523,9 @@ export function LumenQrScanner({
     </div>
   );
 }
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const __isScanningTypeCheck: boolean = false;
+void __isScanningTypeCheck;
 
 export default LumenQrScanner;

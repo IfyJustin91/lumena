@@ -1,24 +1,3 @@
-Cargo.toml:
-
-```toml
-[package]
-name = "spend-policy"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-soroban-sdk = { version = "20.0.0" }
-
-[dev-dependencies]
-soroban-sdk = { version = "20.0.0", features = ["testutils"] }
-```
-
-src/lib.rs:
-
-```rust
 #![no_std]
 
 use soroban_sdk::{
@@ -46,6 +25,7 @@ pub enum Error {
     NoPendingLimit = 6,
     DelayNotElapsed = 7,
     TooManyEntries = 8,
+    TimelockNotExpired = 9,
 }
 
 #[contracttype]
@@ -168,7 +148,7 @@ impl SpendPolicyContract {
             .ok_or(Error::NoPendingLimit)?;
 
         if env.ledger().timestamp() < pending.effective_time {
-            return Err(Error::DelayNotElapsed);
+            return Err(Error::TimelockNotExpired);
         }
 
         env.storage()
@@ -278,164 +258,3 @@ impl SpendPolicyContract {
 }
 
 mod test;
-```
-
-src/test.rs:
-
-```rust
-#![cfg(test)]
-
-use super::*;
-use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::{Address, Env};
-
-fn setup() -> (Env, SpendPolicyContractClient<'static>, Address, Address, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, SpendPolicyContract);
-    let client = SpendPolicyContractClient::new(&env, &contract_id);
-
-    let master = Address::generate(&env);
-    let asset = Address::generate(&env);
-    let account = Address::generate(&env);
-
-    client.initialize(&master);
-    (env, client, master, asset, account)
-}
-
-#[test]
-fn rejects_spend_exceeding_remaining_allowance() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-
-    client.set_limit(&asset, &account, &100);
-
-    // First spend consumes 60 of the 100 allowance.
-    let remaining = client.spend(&asset, &account, &60);
-    assert_eq!(remaining, 40);
-
-    // A spend of 50 exceeds the remaining 40 and must be rejected.
-    let result = client.try_spend(&asset, &account, &50);
-    assert_eq!(result, Err(Ok(Error::ExceedsAllowance)));
-
-    // A spend of exactly the remaining allowance succeeds.
-    let remaining = client.spend(&asset, &account, &40);
-    assert_eq!(remaining, 0);
-
-    // Any further spend is rejected.
-    let result = client.try_spend(&asset, &account, &1);
-    assert_eq!(result, Err(Ok(Error::ExceedsAllowance)));
-}
-
-#[test]
-fn allowance_restores_as_time_advances() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-
-    client.set_limit(&asset, &account, &100);
-    client.spend(&asset, &account, &100);
-    assert_eq!(client.remaining(&asset, &account), 0);
-
-    // Half a day later, nothing has expired yet.
-    env.ledger().set_timestamp(1_000 + WINDOW_SECONDS / 2);
-    assert_eq!(client.remaining(&asset, &account), 0);
-    let result = client.try_spend(&asset, &account, &10);
-    assert_eq!(result, Err(Ok(Error::ExceedsAllowance)));
-
-    // After the full 24-hour window, the spend expires and allowance restores.
-    env.ledger().set_timestamp(1_000 + WINDOW_SECONDS + 1);
-    assert_eq!(client.remaining(&asset, &account), 100);
-    let remaining = client.spend(&asset, &account, &100);
-    assert_eq!(remaining, 0);
-}
-
-#[test]
-fn sliding_window_partial_restoration() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-
-    client.set_limit(&asset, &account, &100);
-    client.spend(&asset, &account, &40);
-
-    // 12 hours later spend another 40.
-    env.ledger().set_timestamp(1_000 + WINDOW_SECONDS / 2);
-    client.spend(&asset, &account, &40);
-    assert_eq!(client.remaining(&asset, &account), 20);
-
-    // 13 hours after the first spend (but only 1 hour after the second),
-    // the first spend has expired, restoring 40 of allowance.
-    env.ledger().set_timestamp(1_000 + WINDOW_SECONDS / 2 + 3_600);
-    assert_eq!(client.remaining(&asset, &account), 60);
-
-    // The second spend is still within the window.
-    env.ledger().set_timestamp(1_000 + WINDOW_SECONDS / 2 + 3_600 + 1);
-    assert_eq!(client.remaining(&asset, &account), 60);
-}
-
-#[test]
-fn delayed_master_key_override() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-
-    client.set_limit(&asset, &account, &100);
-    assert_eq!(client.get_limit(&asset, &account), 100);
-
-    // Schedule a new limit; it should not apply immediately.
-    client.schedule_limit(&asset, &account, &500);
-    assert_eq!(client.get_limit(&asset, &account), 100);
-
-    let pending = client.get_pending_limit(&asset, &account).unwrap();
-    assert_eq!(pending.limit, 500);
-    assert_eq!(pending.effective_time, 1_000 + LIMIT_CHANGE_DELAY);
-
-    // Applying before the delay elapses fails.
-    let result = client.try_apply_pending_limit(&asset, &account);
-    assert_eq!(result, Err(Ok(Error::DelayNotElapsed)));
-
-    // Just before the delay elapses, still fails.
-    env.ledger().set_timestamp(1_000 + LIMIT_CHANGE_DELAY - 1);
-    let result = client.try_apply_pending_limit(&asset, &account);
-    assert_eq!(result, Err(Ok(Error::DelayNotElapsed)));
-
-    // Once the delay elapses, the new limit applies.
-    env.ledger().set_timestamp(1_000 + LIMIT_CHANGE_DELAY);
-    let applied = client.apply_pending_limit(&asset, &account);
-    assert_eq!(applied, 500);
-    assert_eq!(client.get_limit(&asset, &account), 500);
-    assert!(client.get_pending_limit(&asset, &account).is_none());
-
-    // Spending up to the new limit is now allowed.
-    let remaining = client.spend(&asset, &account, &500);
-    assert_eq!(remaining, 0);
-}
-
-#[test]
-fn apply_without_pending_fails() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-
-    let result = client.try_apply_pending_limit(&asset, &account);
-    assert_eq!(result, Err(Ok(Error::NoPendingLimit)));
-}
-
-#[test]
-fn rejects_non_positive_amounts() {
-    let (env, client, _master, asset, account) = setup();
-    env.ledger().set_timestamp(1_000);
-    client.set_limit(&asset, &account, &100);
-
-    let result = client.try_spend(&asset, &account, &0);
-    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
-
-    let result = client.try_spend(&asset, &account, &-5);
-    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
-}
-
-#[test]
-fn double_initialize_fails() {
-    let (env, client, master, _asset, _account) = setup();
-    let _ = env;
-    let result = client.try_initialize(&master);
-    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}

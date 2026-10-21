@@ -8,6 +8,13 @@ export {
 export { PolicyEngine } from "./policy/engine.js";
 export { InMemoryPolicyStore, RedisPolicyStore, FilePolicyStore } from "./policy/store.js";
 export {
+  LedgerIngestionWorker,
+  type LedgerIngestOpts,
+  type LedgerTransactionStatus,
+  type LedgerTransactionUpdate,
+} from "./ledger/ingest.js";
+export { SponsorRefillService, type SponsorRefillOpts } from "./fee-sponsor/refill.js";
+export {
   WebhookDispatcher,
   verifyWebhookSignature,
   type WebhookDispatcherOpts,
@@ -29,6 +36,12 @@ export {
   idempotencyMiddleware,
   type IdempotencyMiddlewareOpts,
 } from "./middleware/idempotency.js";
+export {
+  createAntiReplayMiddleware,
+  type AntiReplayOptions,
+  type AntiReplayRedisClient,
+} from "./middleware/anti-replay.js";
+export { MerkleAuditLog, type AuditDecision, type AuditRecord } from "./audit/merkle-log.js";
 export {
   rbacMiddleware,
   requirePermission,

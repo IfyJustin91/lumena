@@ -52,20 +52,24 @@ describe("Policy API", () => {
     expect(createResponse.status).toBe(201);
     const createdPolicy = await createResponse.json();
 
+    expect(createdPolicy.version).toBe(1);
+
     const updatedRules = [{ type: "max_operations", maxOperations: 5 }];
     const updateResponse = await fetch(`${baseUrl}/policy/${walletId}`, {
       method: "PUT",
-      headers: authHeaders("admin"),
+      headers: { ...authHeaders("admin"), "If-Match": "1" },
       body: JSON.stringify({ walletId, rules: updatedRules }),
     });
 
     expect(updateResponse.status).toBe(200);
+    expect(updateResponse.headers.get("etag")).toBe("2");
     const updatedPolicy = await updateResponse.json();
     expect(updatedPolicy).toMatchObject({
       id: createdPolicy.id,
       walletId,
       rules: updatedRules,
       createdAt: createdPolicy.createdAt,
+      version: 2,
     });
 
     const duplicateResponse = await fetch(`${baseUrl}/policy`, {
@@ -100,13 +104,65 @@ describe("Policy API", () => {
 
     const mismatchResponse = await fetch(`${baseUrl}/policy/${existingWalletId}`, {
       method: "PUT",
-      headers: authHeaders("admin"),
+      headers: { ...authHeaders("admin"), "If-Match": "1" },
       body: JSON.stringify({
         walletId,
         rules: [{ type: "max_operations", maxOperations: 3 }],
       }),
     });
     expect(mismatchResponse.status).toBe(400);
+  });
+
+  it("detects concurrent update conflicts via If-Match versioning", async () => {
+    const walletId = Keypair.random().publicKey();
+    const createResponse = await fetch(`${baseUrl}/policy`, {
+      method: "POST",
+      headers: authHeaders("admin"),
+      body: JSON.stringify({
+        walletId,
+        rules: [{ type: "max_operations", maxOperations: 2 }],
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+    const createdPolicy = await createResponse.json();
+    expect(createdPolicy.version).toBe(1);
+
+    const firstUpdate = await fetch(`${baseUrl}/policy/${walletId}`, {
+      method: "PUT",
+      headers: { ...authHeaders("admin"), "If-Match": "1" },
+      body: JSON.stringify({
+        walletId,
+        rules: [{ type: "max_operations", maxOperations: 5 }],
+      }),
+    });
+    expect(firstUpdate.status).toBe(200);
+    expect(firstUpdate.headers.get("etag")).toBe("2");
+    const firstUpdatedPolicy = await firstUpdate.json();
+    expect(firstUpdatedPolicy.version).toBe(2);
+
+    const staleUpdate = await fetch(`${baseUrl}/policy/${walletId}`, {
+      method: "PUT",
+      headers: { ...authHeaders("admin"), "If-Match": "1" },
+      body: JSON.stringify({
+        walletId,
+        rules: [{ type: "max_operations", maxOperations: 10 }],
+      }),
+    });
+    expect(staleUpdate.status).toBe(412);
+    const staleError = await staleUpdate.json();
+    expect(staleError.error).toMatch(/version/i);
+
+    const missingIfMatch = await fetch(`${baseUrl}/policy/${walletId}`, {
+      method: "PUT",
+      headers: authHeaders("admin"),
+      body: JSON.stringify({
+        walletId,
+        rules: [{ type: "max_operations", maxOperations: 10 }],
+      }),
+    });
+    expect(missingIfMatch.status).toBe(412);
+    const missingError = await missingIfMatch.json();
+    expect(missingError.error).toMatch(/If-Match/i);
   });
 
   it("rejects unauthenticated policy creation with 401", async () => {
@@ -168,7 +224,7 @@ describe("Policy API", () => {
 
     const updateResponse = await fetch(`${baseUrl}/policy/${walletId}`, {
       method: "PUT",
-      headers: authHeaders("operator"),
+      headers: { ...authHeaders("operator"), "If-Match": "1" },
       body: JSON.stringify({
         walletId,
         rules: [{ type: "max_operations", maxOperations: 4 }],

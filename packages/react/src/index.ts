@@ -5,6 +5,7 @@ export type {
   LumenContextValue,
   LumenProviderProps,
   LumenServerProviderProps,
+  LumenNetwork,
 } from "./context.js";
 
 export { useIsMounted } from "./hooks/use-is-mounted.js";
@@ -129,6 +130,13 @@ export type {
   LumenConnectModalTab,
   LumenConnectModalTheme,
 } from "./components/LumenConnectModal.js";
+
+// #258 — Multi-network context switcher and network status bar
+export { LumenNetworkBar } from "./components/LumenNetworkBar.js";
+export type {
+  LumenNetworkBarProps,
+  LumenNetworkLatencyStatus,
+} from "./components/LumenNetworkBar.js";
 
 export { LumenSwapWidget } from "./components/LumenSwapWidget.js";
 export type { LumenSwapWidgetProps } from "./components/LumenSwapWidget.js";

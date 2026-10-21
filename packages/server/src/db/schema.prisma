@@ -102,9 +102,53 @@ model WebhookSubscription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  wallet Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  wallet     Wallet?           @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  deliveries WebhookDelivery[]
 
   @@index([walletId])
   @@index([enabled])
   @@map("webhook_subscriptions")
+}
+
+/// A multi-tenant API consumer with scoped permissions and tiered quotas.
+model Tenant {
+  id                 String   @id @default(uuid())
+  name               String
+  apiKeyHash         String   @unique
+  tier               String   @default("free")
+  monthlyGasQuotaXlm Decimal  @default(0) @db.Decimal(20, 7)
+  monthlyGasUsedXlm  Decimal  @default(0) @db.Decimal(20, 7)
+  allowedDomains     String[] @default([])
+  quotaResetAt       DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([apiKeyHash])
+  @@index([tier])
+  @@index([quotaResetAt])
+  @@map("tenants")
+}
+
+/// A single webhook delivery attempt, tracked for retries and dead-lettering.
+model WebhookDelivery {
+  id           String    @id @default(uuid())
+  webhookId    String
+  event        String
+  payload      Json
+  status       String    @default("pending")
+  attempts     Int       @default(0)
+  lastError    String?
+  nextRetryAt  DateTime?
+  deadLettered Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  webhook WebhookSubscription @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([webhookId, createdAt])
+  @@index([status])
+  @@index([deadLettered])
+  @@index([nextRetryAt])
+  @@map("webhook_deliveries")
 }

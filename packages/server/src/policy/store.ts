@@ -86,6 +86,9 @@ export class FilePolicyStore implements PolicyStore {
                 if (item.createdAt && typeof item.createdAt === "string") {
                   item.createdAt = new Date(item.createdAt);
                 }
+                if (typeof item.version !== "number") {
+                  item.version = 1;
+                }
                 this.policies.set(item.walletId, item);
               }
             }
@@ -95,6 +98,9 @@ export class FilePolicyStore implements PolicyStore {
               if (p && p.walletId) {
                 if (p.createdAt && typeof p.createdAt === "string") {
                   p.createdAt = new Date(p.createdAt);
+                }
+                if (typeof p.version !== "number") {
+                  p.version = 1;
                 }
                 this.policies.set(p.walletId, p);
               }

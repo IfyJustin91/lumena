@@ -3,21 +3,50 @@ import { Keypair } from "@stellar/stellar-sdk";
 import type { AddressInfo } from "node:net";
 import { createServer, type ServerResult } from "../server.js";
 import { EnvSigner } from "../signers/EnvSigner.js";
+import { TenantStore } from "../middleware/auth.js";
 
 describe("API Key Authentication & Rate Limiting Middleware", () => {
   const cosignerKeypair = Keypair.random();
   const feePayerKeypair = Keypair.random();
   const apiKey = "test-secret-key-12345";
+  const quotaApiKey = "test-quota-key-67890";
+  const domainApiKey = "test-domain-key-abcde";
   let serverResult: ServerResult;
   let baseUrl: string;
 
   beforeAll(async () => {
+    const tenantStore = new TenantStore();
+    tenantStore.add({
+      id: "tenant-default",
+      name: "Default Tenant",
+      apiKey,
+      tier: "standard",
+      monthlyGasQuotaXlm: 1000,
+      allowedDomains: [],
+    });
+    tenantStore.add({
+      id: "tenant-quota",
+      name: "Quota Tenant",
+      apiKey: quotaApiKey,
+      tier: "free",
+      monthlyGasQuotaXlm: 0,
+      allowedDomains: [],
+    });
+    tenantStore.add({
+      id: "tenant-domain",
+      name: "Domain Tenant",
+      apiKey: domainApiKey,
+      tier: "standard",
+      monthlyGasQuotaXlm: 1000,
+      allowedDomains: ["trusted.example"],
+    });
+
     serverResult = createServer({
       port: 0,
       network: "local",
       cosignerSigner: new EnvSigner(cosignerKeypair.secret()),
       feePayerSigner: new EnvSigner(feePayerKeypair.secret()),
-      apiKey,
+      tenantStore,
       // Token bucket: capacity 2 (burst), refill 1 token per 60s (steady-state).
       windowMs: 60000,
       max: 2,
@@ -33,11 +62,13 @@ describe("API Key Authentication & Rate Limiting Middleware", () => {
     await new Promise<void>((resolve) => serverResult.server.close(() => resolve()));
   });
 
-  it("allows /health without an API key", async () => {
+  it("allows /health without an API key and reports correct version", async () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
+    expect(typeof body.version).toBe("string");
+    expect(body.version).toBe("0.1.0");
   });
 
   it("does not allow cross-origin requests by default", async () => {
@@ -71,6 +102,50 @@ describe("API Key Authentication & Rate Limiting Middleware", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toBe("Unauthorized");
+  });
+
+  it("rejects protected endpoint with 401 when tenant API key is unknown", async () => {
+    const res = await fetch(`${baseUrl}/sponsor/status`, {
+      headers: { Authorization: "Bearer not-a-registered-tenant-key" },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toBe("Unauthorized");
+  });
+
+  it("rejects requests from a disallowed origin for a domain-restricted tenant", async () => {
+    const res = await fetch(`${baseUrl}/sponsor/status`, {
+      headers: {
+        Authorization: `Bearer ${domainApiKey}`,
+        Origin: "https://untrusted.example",
+      },
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+
+  it("allows requests from an allowed origin for a domain-restricted tenant", async () => {
+    const res = await fetch(`${baseUrl}/sponsor/status`, {
+      headers: {
+        Authorization: `Bearer ${domainApiKey}`,
+        Origin: "https://trusted.example",
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects with 429 and descriptive quota headers when tenant exceeds monthly gas quota", async () => {
+    const res = await fetch(`${baseUrl}/sponsor/status`, {
+      headers: { Authorization: `Bearer ${quotaApiKey}` },
+    });
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.error).toBe("Too Many Requests");
+
+    expect(res.headers.get("x-ratelimit-limit")).not.toBeNull();
+    expect(res.headers.get("x-ratelimit-remaining")).not.toBeNull();
+    expect(res.headers.get("x-ratelimit-reset")).not.toBeNull();
+    expect(res.headers.get("retry-after")).not.toBeNull();
+    expect(Number(res.headers.get("x-ratelimit-remaining"))).toBe(0);
   });
 
   it("rejects protected endpoint with 401 when scheme is not Bearer", async () => {

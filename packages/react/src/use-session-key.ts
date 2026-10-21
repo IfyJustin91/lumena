@@ -13,6 +13,8 @@ export interface SessionKeyState {
   sessionKey: { publicKey: string; expiresAt: number } | null;
   /** Whether a session operation is in progress. */
   isLoading: boolean;
+  /** Whether a session revocation is in progress. */
+  isRevoking: boolean;
   /** Error from the last session operation, if any. */
   error: Error | null;
   /** True if the current session key has expired. */
@@ -21,8 +23,15 @@ export interface SessionKeyState {
   timeRemainingSeconds: number;
   /** Generate a new session keypair and register it with the client. */
   createSession: (durationSeconds?: number) => Promise<SessionKeyInfo>;
-  /** Revoke the currently active session key. */
-  revokeSession: () => void;
+  /**
+   * Revoke the currently active session key.
+   *
+   * When `submitOnChain` is true (the default), a `revoke_session_key`
+   * transaction is submitted (and the server notified) before local state is
+   * cleared. If on-chain revocation fails, the error is thrown and local state
+   * is left intact so the session is not silently dropped.
+   */
+  revokeSession: (submitOnChain?: boolean) => Promise<void>;
 }
 
 /**
@@ -42,6 +51,7 @@ export function useSessionKey(walletId: string, durationSeconds: number = 3600):
     null,
   );
   const [isLoading, setIsLoading] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -88,15 +98,42 @@ export function useSessionKey(walletId: string, durationSeconds: number = 3600):
     [client, durationSeconds, isMounted],
   );
 
-  const revokeSession = useCallback(() => {
-    setSessionKey(null);
-    setError(null);
-  }, []);
+  const revokeSession = useCallback(
+    async (submitOnChain: boolean = true): Promise<void> => {
+      const current = sessionKey;
+      if (!current) {
+        setSessionKey(null);
+        setError(null);
+        return;
+      }
+
+      setIsRevoking(true);
+      setError(null);
+      try {
+        if (submitOnChain) {
+          // Submit a revoke_session_key transaction (and notify the server)
+          // before clearing local state. A failure here must surface to the
+          // caller rather than silently dropping the session.
+          await client.revokeSessionKey(walletId, current.publicKey);
+        }
+        setSessionKey(null);
+        setError(null);
+      } catch (err) {
+        const normalizedError = err instanceof Error ? err : new Error(String(err));
+        setError(normalizedError);
+        throw normalizedError;
+      } finally {
+        setIsRevoking(false);
+      }
+    },
+    [client, sessionKey, walletId],
+  );
 
   return {
     sessionKey,
     // Report a loading state until hydration completes on the client.
     isLoading: isLoading || !isMounted,
+    isRevoking,
     error,
     isExpired,
     timeRemainingSeconds,

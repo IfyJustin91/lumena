@@ -1,0 +1,106 @@
+{
+  "results": [
+    {
+      "name": "smart_account::init",
+      "cpu_instructions": 23031,
+      "memory_bytes": 2872,
+      "within_budget": true,
+      "cpu_budget": 500000,
+      "mem_budget": 2000000,
+      "cpu_pct": 4.6062,
+      "mem_pct": 0.1436
+    },
+    {
+      "name": "smart_account::transfer",
+      "cpu_instructions": 235891,
+      "memory_bytes": 35340,
+      "within_budget": true,
+      "cpu_budget": 600000,
+      "mem_budget": 2500000,
+      "cpu_pct": 39.31516666666667,
+      "mem_pct": 1.4136
+    },
+    {
+      "name": "smart_account::query (signers+threshold)",
+      "cpu_instructions": 45984,
+      "memory_bytes": 5936,
+      "within_budget": true,
+      "cpu_budget": 200000,
+      "mem_budget": 1000000,
+      "cpu_pct": 22.992,
+      "mem_pct": 0.5936
+    },
+    {
+      "name": "paymaster::initialize",
+      "cpu_instructions": 35001,
+      "memory_bytes": 4542,
+      "within_budget": true,
+      "cpu_budget": 400000,
+      "mem_budget": 1500000,
+      "cpu_pct": 8.75025,
+      "mem_pct": 0.3028
+    },
+    {
+      "name": "paymaster::deposit",
+      "cpu_instructions": 180198,
+      "memory_bytes": 30792,
+      "within_budget": true,
+      "cpu_budget": 600000,
+      "mem_budget": 2000000,
+      "cpu_pct": 30.032999999999998,
+      "mem_pct": 1.5396
+    },
+    {
+      "name": "paymaster::set_spend_limit",
+      "cpu_instructions": 47892,
+      "memory_bytes": 8174,
+      "within_budget": true,
+      "cpu_budget": 400000,
+      "mem_budget": 1500000,
+      "cpu_pct": 11.973,
+      "mem_pct": 0.5449333333333333
+    },
+    {
+      "name": "paymaster::sponsor_invocation",
+      "cpu_instructions": 89760,
+      "memory_bytes": 17124,
+      "within_budget": true,
+      "cpu_budget": 800000,
+      "mem_budget": 2500000,
+      "cpu_pct": 11.219999999999999,
+      "mem_pct": 0.68496
+    },
+    {
+      "name": "session_keys::register",
+      "cpu_instructions": 63799,
+      "memory_bytes": 9360,
+      "within_budget": true,
+      "cpu_budget": 600000,
+      "mem_budget": 2000000,
+      "cpu_pct": 10.633166666666668,
+      "mem_pct": 0.468
+    },
+    {
+      "name": "session_keys::validate",
+      "cpu_instructions": 64360,
+      "memory_bytes": 8250,
+      "within_budget": true,
+      "cpu_budget": 500000,
+      "mem_budget": 1500000,
+      "cpu_pct": 12.872,
+      "mem_pct": 0.5499999999999999
+    },
+    {
+      "name": "session_keys::revoke",
+      "cpu_instructions": 37097,
+      "memory_bytes": 5988,
+      "within_budget": true,
+      "cpu_budget": 400000,
+      "mem_budget": 1500000,
+      "cpu_pct": 9.27425,
+      "mem_pct": 0.3992
+    }
+  ],
+  "all_pass": true,
+  "timestamp": "1792392289"
+}

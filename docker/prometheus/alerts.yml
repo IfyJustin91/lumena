@@ -1,0 +1,41 @@
+groups:
+  - name: lumen-service
+    rules:
+      - alert: SponsorBalanceCritical
+        expr: lumen_sponsor_balance_xlm < 100
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sponsor account balance is below 100 XLM
+
+      - alert: CosignErrorRateHigh
+        expr: |
+          sum(rate(lumen_cosign_requests_total{status="rejected"}[5m]))
+          /
+          clamp_min(sum(rate(lumen_cosign_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Co-sign error rate is above 5%
+
+      - alert: RPCLatencySpike
+        expr: lumen_stellar_endpoint_latency_ms > 2000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Stellar RPC endpoint latency is above 2 seconds
+
+      - alert: PolicyLatencySpike
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(lumen_policy_evaluation_duration_seconds_bucket[5m])) by (le)
+          ) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Policy evaluation p95 latency is above 2 seconds

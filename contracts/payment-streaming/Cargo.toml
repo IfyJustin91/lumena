@@ -1,0 +1,18 @@
+[package]
+name = "payment-streaming"
+version = "0.1.0"
+edition = "2021"
+description = "Automated micro-payment streaming contract for Stellar Soroban"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { version = "22.0.0" }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

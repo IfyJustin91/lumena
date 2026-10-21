@@ -252,6 +252,8 @@ const swapWidgetMeta: Meta<typeof LumenSwapWidget> = {
     slippage: { control: { type: 'number', min: 0, max: 100, step: 0.1 } },
     loading: { control: 'boolean' },
     disabled: { control: 'boolean' },
+    marketRate: { control: { type: 'number', min: 0, step: 0.001 } },
+    highPriceImpactThreshold: { control: { type: 'number', min: 0, max: 1, step: 0.01 } },
     onSwap: { action: 'swapped' },
     onFromAmountChange: { action: 'fromAmountChanged' },
     onToAmountChange: { action: 'toAmountChanged' },
@@ -287,6 +289,39 @@ export const SwapWidgetDisabled: StoryObj<typeof LumenSwapWidget> = {
   args: {
     ...SwapWidgetDefault.args,
     disabled: true,
+  },
+};
+
+export const SwapWidgetLowPriceImpact: StoryObj<typeof LumenSwapWidget> = {
+  name: 'Low Price Impact',
+  args: {
+    ...SwapWidgetDefault.args,
+    fromAmount: '100',
+    toAmount: '12.2',
+    marketRate: 0.125,
+    highPriceImpactThreshold: 0.02,
+  },
+};
+
+export const SwapWidgetHighPriceImpact: StoryObj<typeof LumenSwapWidget> = {
+  name: 'High Price Impact (Warning)',
+  args: {
+    ...SwapWidgetDefault.args,
+    fromAmount: '10000',
+    toAmount: '1100',
+    marketRate: 0.125,
+    highPriceImpactThreshold: 0.02,
+  },
+};
+
+export const SwapWidgetSeverePriceImpact: StoryObj<typeof LumenSwapWidget> = {
+  name: 'Severe Price Impact (Confirmation)',
+  args: {
+    ...SwapWidgetDefault.args,
+    fromAmount: '50000',
+    toAmount: '5000',
+    marketRate: 0.125,
+    highPriceImpactThreshold: 0.02,
   },
 };
 

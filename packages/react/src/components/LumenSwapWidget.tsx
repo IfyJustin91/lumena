@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 
 export interface LumenSwapWidgetProps {
   /** Asset code being sold. */
@@ -11,6 +11,10 @@ export interface LumenSwapWidgetProps {
   toAmount: string;
   /** Allowed slippage as a percentage, e.g. 0.5 for 0.5%. */
   slippage: number;
+  /** The fair market rate (toAsset per fromAsset) used to compute price impact. */
+  marketRate?: number;
+  /** Fraction (0–1) above which a price impact warning is shown. Default 0.02 (2%). */
+  highPriceImpactThreshold?: number;
   /** Disables the form while a quote or execution is in flight. */
   loading?: boolean;
   /** Disables the widget completely. */
@@ -36,6 +40,90 @@ function formatPrice(fromAmount: string, toAmount: string): string {
   return (toValue / fromValue).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function computePriceImpact(
+  fromAmount: string,
+  toAmount: string,
+  marketRate: number | undefined,
+): number | null {
+  const fromValue = Number(fromAmount);
+  const toValue = Number(toAmount);
+
+  if (
+    marketRate == null ||
+    marketRate <= 0 ||
+    !Number.isFinite(fromValue) ||
+    !Number.isFinite(toValue) ||
+    fromValue <= 0
+  ) {
+    return null;
+  }
+
+  const expectedTo = fromValue * marketRate;
+  if (expectedTo <= 0) return null;
+  return (expectedTo - toValue) / expectedTo;
+}
+
+const SEVERE_IMPACT_THRESHOLD = 0.05;
+
+function HighPriceImpactWarning({
+  priceImpact,
+  severe,
+  confirmed,
+  onConfirmChange,
+}: {
+  priceImpact: number;
+  severe: boolean;
+  confirmed: boolean;
+  onConfirmChange: (checked: boolean) => void;
+}): React.ReactElement {
+  const pct = (priceImpact * 100).toFixed(2);
+  const bg = severe ? "rgba(239, 68, 68, 0.1)" : "rgba(234, 179, 8, 0.1)";
+  const border = severe ? "rgba(239, 68, 68, 0.4)" : "rgba(234, 179, 8, 0.4)";
+  const color = severe ? "#b91c1c" : "#92400e";
+
+  return (
+    <div
+      role="alert"
+      style={{
+        padding: "0.75rem 1rem",
+        borderRadius: "12px",
+        border: `1px solid ${border}`,
+        background: bg,
+        color,
+        fontSize: "0.85rem",
+        lineHeight: 1.5,
+      }}
+    >
+      <strong>
+        {severe ? "Very high price impact" : "High price impact"} ({pct}%)
+      </strong>
+      <p style={{ margin: "0.35rem 0 0" }}>
+        {severe
+          ? "You will lose a significant portion of your funds due to price impact. Confirm below to proceed."
+          : "The quoted rate differs from the market rate. Consider reducing your trade size."}
+      </p>
+      {severe && (
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            marginTop: "0.5rem",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(e) => onConfirmChange(e.target.checked)}
+          />
+          I understand the risk and want to proceed
+        </label>
+      )}
+    </div>
+  );
+}
+
 function formatMinimumReceived(toAmount: string, slippage: number): string {
   const toValue = Number(toAmount);
 
@@ -53,6 +141,8 @@ export function LumenSwapWidget({
   fromAmount,
   toAmount,
   slippage,
+  marketRate,
+  highPriceImpactThreshold = 0.02,
   loading = false,
   disabled = false,
   className,
@@ -60,7 +150,16 @@ export function LumenSwapWidget({
   onToAmountChange,
   onSwap,
 }: LumenSwapWidgetProps): React.ReactElement {
-  const isDisabled = disabled || loading;
+  const [severeImpactConfirmed, setSevereImpactConfirmed] = useState(false);
+
+  const priceImpact = useMemo(
+    () => computePriceImpact(fromAmount, toAmount, marketRate),
+    [fromAmount, toAmount, marketRate],
+  );
+
+  const showWarning = priceImpact != null && priceImpact > highPriceImpactThreshold;
+  const isSevere = priceImpact != null && priceImpact > SEVERE_IMPACT_THRESHOLD;
+  const isDisabled = disabled || loading || (isSevere && !severeImpactConfirmed);
 
   const estimatedPrice = formatPrice(fromAmount, toAmount);
   const minimumReceived = formatMinimumReceived(toAmount, slippage);
@@ -207,6 +306,15 @@ export function LumenSwapWidget({
           </strong>
         </div>
       </div>
+
+      {showWarning && priceImpact != null && (
+        <HighPriceImpactWarning
+          priceImpact={priceImpact}
+          severe={isSevere}
+          confirmed={severeImpactConfirmed}
+          onConfirmChange={setSevereImpactConfirmed}
+        />
+      )}
 
       <button
         type="button"

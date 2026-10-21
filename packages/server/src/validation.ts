@@ -121,3 +121,32 @@ export const WebhookPatchSchema = z
   });
 
 export type WebhookPatch = z.infer<typeof WebhookPatchSchema>;
+
+/**
+ * Schema for GET /auth/challenge?account=<publicKey> — SEP-10 challenge request.
+ */
+export const Sep10ChallengeQuerySchema = z.object({
+  account: z.string().refine((val) => StrKey.isValidEd25519PublicKey(val), {
+    message: "account must be a valid Stellar public key",
+  }),
+});
+
+export type Sep10ChallengeQuery = z.infer<typeof Sep10ChallengeQuerySchema>;
+
+/**
+ * Schema for POST /auth/token — SEP-10 signed challenge submission.
+ */
+export const Sep10TokenRequestSchema = z.object({
+  transaction: z.string().min(1, "transaction is required"),
+});
+
+export type Sep10TokenRequest = z.infer<typeof Sep10TokenRequestSchema>;
+
+/**
+ * Schema for POST /webhooks/deliveries/:id/retry — delivery id path param.
+ */
+export const WebhookDeliveryRetryParamsSchema = z.object({
+  id: z.string().min(1, "id is required"),
+});
+
+export type WebhookDeliveryRetryParams = z.infer<typeof WebhookDeliveryRetryParamsSchema>;

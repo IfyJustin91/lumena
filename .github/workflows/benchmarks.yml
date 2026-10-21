@@ -1,0 +1,137 @@
+name: Soroban Benchmark Suite
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/benchmarks.yml'
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/benchmarks.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmarks:
+    name: Resource Footprint Profiling
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+            ${{ runner.os }}-cargo-
+
+      # Pin ed25519-dalek to 2.x for soroban-sdk 22 compat
+      - name: Pin ed25519-dalek
+        run: cargo update ed25519-dalek@3.0.0 --precise 3.0.0 || true
+
+      - name: Run benchmark suite with resource thresholds
+        id: bench
+        run: |
+          cargo run --package benchmarks --bin benchmarks 2>&1 | tee benchmark-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Upload benchmark results (JSON)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
+          retention-days: 90
+
+      - name: Upload benchmark output (text)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-output
+          path: benchmark-output.txt
+          retention-days: 30
+
+      - name: Post benchmark summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+
+            let body = '## ⚡ Soroban Resource Footprint Report\n\n';
+
+            try {
+              const data = JSON.parse(fs.readFileSync('benchmark-results.json', 'utf8'));
+              const all_pass = data.all_pass;
+
+              body += all_pass
+                ? '✅ All benchmarks passed resource budgets.\n\n'
+                : '❌ One or more benchmarks **exceeded** resource budgets.\n\n';
+
+              body += '| Benchmark | CPU Instructions | Memory Bytes | CPU % | Mem % | Status |\n';
+              body += '|-----------|-----------------|--------------|-------|-------|--------|\n';
+
+              for (const r of data.results) {
+                const status = r.within_budget ? '✅ PASS' : '❌ FAIL';
+                body += `| \`${r.name}\` | ${r.cpu_instructions.toLocaleString()} | ${r.memory_bytes.toLocaleString()} | ${r.cpu_pct.toFixed(1)}% | ${r.mem_pct.toFixed(1)}% | ${status} |\n`;
+              }
+
+              body += `\n> Budgets: CPU ≤ defined per-benchmark ceiling | Mem ≤ defined per-benchmark ceiling\n`;
+              body += `> _Timestamp: ${data.timestamp}_\n`;
+            } catch (e) {
+              body += `> ⚠️ Could not parse benchmark-results.json: ${e.message}\n`;
+              const raw = fs.existsSync('benchmark-output.txt')
+                ? fs.readFileSync('benchmark-output.txt', 'utf8')
+                : '';
+              if (raw) body += `\n\`\`\`\n${raw.slice(0, 3000)}\n\`\`\`\n`;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.startsWith('## ⚡ Soroban Resource Footprint Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if any benchmark exceeded budget
+        if: steps.bench.outputs.exit_code != '0'
+        run: |
+          echo "::error::One or more Soroban benchmarks exceeded their resource budget thresholds."
+          exit 1

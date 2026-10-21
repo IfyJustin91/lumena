@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Networks } from "@stellar/stellar-sdk";
 import { StellarClient } from "../stellar/client.js";
 
 describe("core/client configuration", () => {
@@ -12,6 +13,16 @@ describe("core/client configuration", () => {
     const client = new StellarClient({ network: "mainnet" });
     expect(client.config.network).toBe("mainnet");
     expect(client.config.horizonUrl).toBe("https://horizon.stellar.org");
+  });
+
+  it("configures futurenet network correctly", () => {
+    const client = new StellarClient({ network: "futurenet" });
+    expect(client.config.network).toBe("futurenet");
+    expect(client.config.horizonUrl).toBe(
+      "https://horizon-futurenet.stellar.org",
+    );
+    expect(client.config.rpcUrl).toBe("https://rpc-futurenet.stellar.org");
+    expect(client.config.networkPassphrase).toBe(Networks.FUTURENET);
   });
 
   it("exposes a batch cosign helper that processes each request", async () => {

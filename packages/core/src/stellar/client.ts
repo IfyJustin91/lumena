@@ -24,6 +24,12 @@ const NETWORKS: Record<StellarNetwork, StellarConfig> = {
     rpcUrl: "http://localhost:8000/rpc",
     networkPassphrase: Networks.STANDALONE,
   },
+  futurenet: {
+    network: "futurenet",
+    horizonUrl: "https://horizon-futurenet.stellar.org",
+    rpcUrl: "https://rpc-futurenet.stellar.org",
+    networkPassphrase: Networks.FUTURENET,
+  },
 };
 
 export interface StellarClientOpts {

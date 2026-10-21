@@ -295,34 +295,5 @@ impl SocialRecoveryContract {
     }
 }
 
+#[cfg(test)]
 mod test;
-```
-
-```toml
-[package]
-name = "social-recovery"
-version = "0.1.0"
-edition = "2021"
-publish = false
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[features]
-testutils = ["soroban-sdk/testutils"]
-
-[dependencies]
-soroban-sdk = "21.0.0"
-
-[dev-dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
-
-[profile.release]
-opt-level = "z"
-overflow-checks = true
-debug = 0
-strip = "symbols"
-debug-assertions = false
-panic = "abort"
-codegen-units = 1
-lto = true

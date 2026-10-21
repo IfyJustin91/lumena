@@ -1,10 +1,16 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { LumenClient } from "@lumen/web-sdk";
 import { useIsMounted } from "./hooks/use-is-mounted.js";
 
+/** Stellar networks a `LumenProvider` can switch between. */
+export type LumenNetwork = "testnet" | "futurenet" | "mainnet";
+
+export const DEFAULT_SUPPORTED_NETWORKS: LumenNetwork[] = ["testnet", "futurenet", "mainnet"];
+
 export interface LumenContextValue {
+  /** Client bound to `currentNetwork`. Changes identity when the network is switched. */
   client: LumenClient;
   /**
    * `true` once the provider has mounted on the client, `false` during
@@ -14,6 +20,15 @@ export interface LumenContextValue {
    * `ReferenceError: window is not defined` on the server.
    */
   isMounted: boolean;
+  /** The network the active `client` is connected to. */
+  currentNetwork: LumenNetwork;
+  /** Networks that `switchNetwork` accepts. */
+  supportedNetworks: LumenNetwork[];
+  /**
+   * Switches the active network. Every hook reading `client` from this
+   * context (`useBalance`, `useWallet`, …) refetches against the new network.
+   */
+  switchNetwork: (network: LumenNetwork) => void;
 }
 
 export const LumenContext = createContext<LumenContextValue | null>(null);
@@ -71,10 +86,26 @@ function createServerSafeClientProxy(): LumenClient {
 export const serverSafeLumenContextValue: LumenContextValue = {
   client: createServerSafeClientProxy(),
   isMounted: false,
+  currentNetwork: "testnet",
+  supportedNetworks: ["testnet"],
+  switchNetwork: () => {},
 };
 
 export interface LumenProviderProps {
+  /** Client connected to the initial `network`. */
   client: LumenClient;
+  /** Network the provided `client` is connected to. Defaults to "testnet". */
+  network?: LumenNetwork;
+  /**
+   * Networks the user may switch to. Defaults to all networks when
+   * `createClient` is provided, otherwise only the initial `network`.
+   */
+  supportedNetworks?: LumenNetwork[];
+  /**
+   * Factory used to create a client for a network other than the initial
+   * one. Clients are created lazily on first switch and cached.
+   */
+  createClient?: (network: LumenNetwork) => LumenClient;
   /**
    * BCP-47 locale code used to translate all prebuilt Lumen UI components.
    * Supported values: "en" | "es" | "pt" | "fr" | "ja"
@@ -86,16 +117,62 @@ export interface LumenProviderProps {
 
 export function LumenProvider({
   client,
+  network = "testnet",
+  supportedNetworks,
+  createClient,
   locale = "en",
   children,
 }: LumenProviderProps) {
   const isMounted = useIsMounted();
+  const [currentNetwork, setCurrentNetwork] = useState<LumenNetwork>(network);
+  const clientsRef = useRef(new Map<LumenNetwork, LumenClient>());
+
+  const networks = supportedNetworks ?? (createClient ? DEFAULT_SUPPORTED_NETWORKS : [network]);
+
+  const activeClient = useMemo(() => {
+    if (currentNetwork === network || !createClient) {
+      return client;
+    }
+    let networkClient = clientsRef.current.get(currentNetwork);
+    if (!networkClient) {
+      networkClient = createClient(currentNetwork);
+      clientsRef.current.set(currentNetwork, networkClient);
+    }
+    return networkClient;
+  }, [client, network, currentNetwork, createClient]);
+
+  const switchNetwork = useCallback(
+    (next: LumenNetwork) => {
+      if (!networks.includes(next)) {
+        throw new Error(
+          `@lumen/react: Network "${next}" is not supported. ` +
+            `Supported networks: ${networks.join(", ")}`,
+        );
+      }
+      if (next !== network && !createClient) {
+        throw new Error(
+          `@lumen/react: Cannot switch to "${next}" without a createClient prop on LumenProvider.`,
+        );
+      }
+      setCurrentNetwork(next);
+    },
+    [networks, network, createClient],
+  );
+
   // On the server, expose the server-safe proxy so browser crypto / WebAuthn
   // calls fail with a descriptive error instead of a `ReferenceError`.
-  const safeClient = isBrowserEnvironment() ? client : serverSafeLumenContextValue.client;
+  const safeClient = isBrowserEnvironment() ? activeClient : serverSafeLumenContextValue.client;
 
   return (
-    <LumenContext.Provider value={{ client: safeClient, isMounted }}>
+    <LumenContext.Provider
+      value={{
+        client: safeClient,
+        isMounted,
+        currentNetwork,
+        supportedNetworks: networks,
+        switchNetwork,
+      }}
+    >
       {children}
     </LumenContext.Provider>
   );
@@ -107,6 +184,8 @@ export interface LumenServerProviderProps {
    * proxy is used that throws a descriptive error if any method is invoked.
    */
   client?: LumenClient;
+  /** Network to report during server rendering. Defaults to "testnet". */
+  network?: LumenNetwork;
   children: React.ReactNode;
 }
 
@@ -118,11 +197,15 @@ export interface LumenServerProviderProps {
  */
 export function LumenServerProvider({
   client,
+  network = "testnet",
   children,
 }: LumenServerProviderProps) {
   const value: LumenContextValue = {
+    ...serverSafeLumenContextValue,
     client: client ?? serverSafeLumenContextValue.client,
     isMounted: false,
+    currentNetwork: network,
+    supportedNetworks: [network],
   };
 
   return (

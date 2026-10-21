@@ -11,3 +11,4 @@ e2e-config.json
 
 # Rust / Soroban
 target/
+benchmark-results.json

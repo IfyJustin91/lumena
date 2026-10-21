@@ -1,5 +1,5 @@
 import type { Keypair, Asset } from "@stellar/stellar-sdk";
-import { Operation, TransactionBuilder, BASE_FEE } from "@stellar/stellar-sdk";
+import { Operation, TransactionBuilder, BASE_FEE, Memo } from "@stellar/stellar-sdk";
 import type { StellarClient } from "../stellar/client.js";
 import { createSponsoredAccount } from "../stellar/account.js";
 import { setupMultisig } from "../stellar/multisig.js";
@@ -176,13 +176,18 @@ export class Wallet {
   }
 
   /** Builds, signs, and submits a payment from the wallet account. */
-  async send(destination: string, asset: Asset, amount: string): Promise<{ hash: string }> {
+  async send(
+    destination: string,
+    asset: Asset,
+    amount: string,
+    memo?: Memo | string,
+  ): Promise<{ hash: string }> {
     if (!this._keypair) throw new Error("Wallet not initialized");
     if (!this.serverUrl) {
       throw new Error("A Lumen server URL is required to send payments through policy enforcement");
     }
 
-    const signedXdr = await this.buildPaymentTransaction(destination, asset, amount);
+    const signedXdr = await this.buildPaymentTransaction(destination, asset, amount, memo);
     const cosignResponse = await fetch(`${this.serverUrl}/cosign`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -237,25 +242,28 @@ export class Wallet {
     destination: string,
     asset: Asset,
     amount: string,
+    memo?: Memo | string,
   ): Promise<string> {
     if (!this._keypair) throw new Error("Wallet not initialized");
 
     const account = await this.client.horizon.loadAccount(this.address);
 
-    const tx = new TransactionBuilder(account, {
+    const builder = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.client.networkPassphrase,
-    })
-      .addOperation(
-        Operation.payment({
-          destination,
-          asset,
-          amount,
-        }),
-      )
-      .setTimeout(180)
-      .build();
+    }).addOperation(
+      Operation.payment({
+        destination,
+        asset,
+        amount,
+      }),
+    );
 
+    if (memo !== undefined) {
+      builder.addMemo(typeof memo === "string" ? Memo.text(memo) : memo);
+    }
+
+    const tx = builder.setTimeout(180).build();
     tx.sign(this._keypair);
     return tx.toXDR();
   }
